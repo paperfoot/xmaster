@@ -1,5 +1,30 @@
 use serde::Serialize;
 
+/// Algorithm weights from the open-source X ranking code (twitter/the-algorithm-ml).
+/// Source: projects/home/recap/README.md — Heavy Ranker scoring weights.
+/// These are the REAL weights, not blog approximations.
+///
+/// The scoring formula is: Final Score = Σ(weight_i × P(action_i))
+///
+/// | Signal                      | Weight | Ratio to Like |
+/// |-----------------------------|--------|---------------|
+/// | Reply + author replies back | 75.0   | 150x          |
+/// | Reply                       | 13.5   | 27x           |
+/// | Good profile click          | 12.0   | 24x           |
+/// | Good click                  | 11.0   | 22x           |
+/// | Retweet                     | 1.0    | 2x            |
+/// | Like/Favorite               | 0.5    | 1x (baseline) |
+/// | Video playback 50%+         | 0.005  | ~0            |
+/// | Negative feedback           | -74.0  | -148x         |
+/// | Report                      | -369.0 | -738x         |
+///
+/// Time decay: halflife = 360 minutes (6 hours), base = 0.6
+/// Out-of-network reply penalty: -10.0 (subtractive)
+///
+/// Source: github.com/twitter/the-algorithm (ranking.thrift, recap/README.md)
+/// Note: Blue/Premium boost defaults to 1.0 in open-source code (configurable but neutral by default).
+pub const ALGORITHM_SOURCE: &str = "twitter/the-algorithm-ml (April 2023, updated Sep 2025)";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PreflightResult {
     pub score: u32,
