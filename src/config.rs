@@ -70,15 +70,10 @@ pub fn config_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("XMASTER_CONFIG_DIR") {
         return PathBuf::from(dir);
     }
-    ProjectDirs::from("com", "199biotechnologies", "xmaster")
-        .map(|p| p.config_dir().to_path_buf())
-        .unwrap_or_else(|| {
-            dirs_fallback()
-        })
-}
-
-fn dirs_fallback() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    // Use ~/.config/xmaster on all platforms (consistent with search-cli, onchain-cli)
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".config").join("xmaster")
 }
 
@@ -88,9 +83,15 @@ pub fn config_path() -> PathBuf {
 
 pub fn load_config() -> Result<AppConfig, XmasterError> {
     let path = config_path();
-    let config: AppConfig = Figment::new()
-        .merge(Serialized::defaults(AppConfig::default()))
-        .merge(Toml::file_exact(&path))
+    let mut figment = Figment::new()
+        .merge(Serialized::defaults(AppConfig::default()));
+
+    // Only merge TOML if file exists (config is optional)
+    if path.exists() {
+        figment = figment.merge(Toml::file_exact(&path));
+    }
+
+    let config: AppConfig = figment
         .merge(Env::prefixed("XMASTER_").split("_"))
         .extract()
         .map_err(|e| XmasterError::Config(e.to_string()))?;

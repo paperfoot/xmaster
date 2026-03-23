@@ -101,9 +101,13 @@ impl XaiSearch {
             "store": false,
         });
 
-        let resp = self
-            .ctx
-            .client
+        // xAI Responses API needs a longer timeout (Grok runs search server-side)
+        let xai_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| XmasterError::Http(e))?;
+
+        let resp = xai_client
             .post("https://api.x.ai/v1/responses")
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
