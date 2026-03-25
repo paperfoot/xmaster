@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>Enterprise-grade X/Twitter CLI — dual backend, agent-first, blazing fast.</strong><br>
-  <em>X API v2 + xAI Grok search in one binary. Built for <a href="https://github.com/openclaw">OpenClaw</a> agents, Claude Code, and humans.</em>
+  <strong>X CLI for humans and agents. Post, search, reply, track; all from the terminal.</strong><br>
+  <em>X API v2 + xAI Grok in one Rust binary. Works with Claude Code, any AI agent, or just you.</em>
 </p>
 
 <p align="center">
@@ -17,7 +17,9 @@
 
 ---
 
-A single Rust binary that gives you full control over X/Twitter: post, reply, like, retweet, DM, search, bookmark, follow, schedule, and more. Two search backends — X API v2 for structured queries and xAI/Grok for AI-powered semantic search. Designed from day one for AI agents with structured JSON output, semantic exit codes, and auto-JSON when piped.
+I built xmaster because I wanted my AI agents to handle X for me; find interesting posts in my niche, draft replies in my voice, track what's working, and make the whole experience less of a chore. Not for spamming or automation theatre; just a more convenient way to stay engaged when you'd rather be building things.
+
+A single Rust binary with two search backends (X API v2 + xAI/Grok), structured JSON output for agents, and pre-flight intelligence that catches bad posts before they go out.
 
 ```bash
 xmaster post "Hello from the command line"
@@ -27,12 +29,14 @@ xmaster post "Hello from the command line"
 
 ## Why xmaster
 
-Every X CLI makes you choose between official API features and AI-powered search. **xmaster** gives you both:
+Most X tools make you pick between the official API and scraping. xmaster gives you both; plus the bits nobody else builds.
 
-- **Dual backend** — X API v2 (OAuth 1.0a) for posting, engagement, DMs, and structured search. xAI/Grok for AI-powered semantic search and trending topics.
-- **Agent-first** — Structured JSON output, semantic exit codes (0-4), machine-readable `agent-info` command, auto-JSON when piped. Built for AI agents that shell out.
-- **Enterprise-grade** — Per-provider rate limiting (token bucket), OAuth 1.0a signing, media uploads, polls, quote tweets. Production-ready.
-- **Single binary** — ~8MB Rust binary, ~2ms startup. Reply fallback uses a small Python helper script (stdlib only, no pip deps).
+- **Two search backends** — X API v2 for structured queries. xAI/Grok for "find me interesting posts about longevity from today." Use whichever fits.
+- **Agent-friendly** — JSON output, semantic exit codes, machine-readable `agent-info`. Your AI agent shells out to xmaster and gets structured data back. Auto-JSON when piped.
+- **Pre-flight intelligence** — Scores your post before it goes out. Catches weak hooks, link penalties, engagement bait. Saves you from posting something that'll get buried.
+- **Reply bypass** — X blocks programmatic replies to strangers. xmaster handles it automatically via web session fallback. You just run `reply` and it works.
+- **Writing style** — Save how you write. Your agent drafts in your voice, not generic AI slop.
+- **Single binary** — ~8MB Rust, fast startup. Reply fallback uses a small Python helper (stdlib only, no pip deps).
 
 ## Install
 

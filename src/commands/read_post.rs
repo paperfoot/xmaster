@@ -17,7 +17,7 @@ struct PostDisplay {
     impressions: u64,
     bookmarks: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    created_at: Option<String>,
+    date: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     media_urls: Vec<String>,
 }
@@ -34,7 +34,7 @@ impl Tableable for PostDisplay {
         table.add_row(vec!["Replies", &self.replies.to_string()]);
         table.add_row(vec!["Impressions", &self.impressions.to_string()]);
         table.add_row(vec!["Bookmarks", &self.bookmarks.to_string()]);
-        if let Some(ref date) = self.created_at {
+        if let Some(ref date) = self.date {
             table.add_row(vec!["Date", date]);
         }
         for url in &self.media_urls {
@@ -66,7 +66,7 @@ pub async fn execute(
         replies: metrics.map(|m| m.reply_count).unwrap_or(0),
         impressions: metrics.map(|m| m.impression_count).unwrap_or(0),
         bookmarks: metrics.map(|m| m.bookmark_count).unwrap_or(0),
-        created_at: tweet.created_at,
+        date: tweet.created_at,
         media_urls: tweet.media_urls,
     };
     output::render(format, &display, None);

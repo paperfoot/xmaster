@@ -20,7 +20,7 @@ struct ReplyItem {
     text: String,
     likes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    created_at: Option<String>,
+    date: Option<String>,
 }
 
 impl Tableable for RepliesResult {
@@ -46,7 +46,7 @@ impl Tableable for RepliesResult {
 
 impl CsvRenderable for RepliesResult {
     fn csv_headers() -> Vec<&'static str> {
-        vec!["id", "author", "text", "likes", "created_at"]
+        vec!["id", "author", "text", "likes", "date"]
     }
     fn csv_rows(&self) -> Vec<Vec<String>> {
         self.replies
@@ -57,7 +57,7 @@ impl CsvRenderable for RepliesResult {
                     r.author.clone(),
                     r.text.clone(),
                     r.likes.to_string(),
-                    r.created_at.clone().unwrap_or_default(),
+                    r.date.clone().unwrap_or_default(),
                 ]
             })
             .collect()
@@ -88,7 +88,7 @@ pub async fn execute(
                 author: t.author_username.unwrap_or_else(|| "unknown".into()),
                 text: t.text,
                 likes,
-                created_at: t.created_at,
+                date: t.created_at,
             }
         })
         .collect();

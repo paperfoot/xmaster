@@ -899,7 +899,7 @@ impl XApi {
         tweet_id: &str,
         count: usize,
     ) -> Result<Vec<TweetData>, XmasterError> {
-        let max = count.clamp(10, 100);
+        let max = count.clamp(1, 100);
         let query = format!("conversation_id:{tweet_id}");
         self.search_tweets(&query, "recency", max).await
     }
@@ -1024,7 +1024,7 @@ impl XApi {
         user_id: &str,
         count: usize,
     ) -> Result<Vec<TweetData>, XmasterError> {
-        let max = count.clamp(5, 100);
+        let max = count.clamp(1, 100);
         let url = format!(
             "{BASE}/users/{user_id}/tweets?max_results={max}&{tf}&{exp}&{uf}",
             tf = Self::tweet_fields(),
@@ -1051,7 +1051,7 @@ impl XApi {
         count: usize,
         since_id: Option<&str>,
     ) -> Result<Vec<TweetData>, XmasterError> {
-        let max = count.clamp(5, 100);
+        let max = count.clamp(1, 100);
         let since_param = since_id
             .map(|id| format!("&since_id={id}"))
             .unwrap_or_default();
@@ -1123,7 +1123,7 @@ impl XApi {
         mode: &str,
         count: usize,
     ) -> Result<Vec<TweetData>, XmasterError> {
-        let max = count.clamp(10, 100);
+        let max = count.clamp(1, 100);
         let encoded_query = percent_encoding::utf8_percent_encode(
             query,
             percent_encoding::NON_ALPHANUMERIC,
