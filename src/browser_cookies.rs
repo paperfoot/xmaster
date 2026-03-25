@@ -6,10 +6,12 @@
 use crate::errors::XmasterError;
 use std::path::PathBuf;
 
-/// The two cookies needed for X web session auth.
+/// Cookies needed for X web session auth.
 pub struct WebCookies {
     pub ct0: String,
     pub auth_token: String,
+    /// Full cookie header string (all X cookies for anti-automation bypass)
+    pub full_cookie_header: String,
 }
 
 /// Try all supported browsers, return the first that has valid X cookies.
