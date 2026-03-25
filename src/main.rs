@@ -8,6 +8,7 @@ mod errors;
 pub mod intel;
 mod output;
 mod providers;
+mod star_nudge;
 
 use clap::Parser;
 use cli::Cli;
@@ -52,4 +53,7 @@ async fn main() {
         output::render_error(format, e.error_code(), &e.to_string(), &e.suggestion());
         std::process::exit(e.exit_code());
     }
+
+    // One-time star nudge after a successful command
+    star_nudge::maybe_show(format);
 }

@@ -91,6 +91,10 @@ pub async fn dispatch(
             }
         },
         Commands::Update { check } => update::execute(*check).await,
+        Commands::Star => {
+            crate::star_nudge::open_star_page();
+            Ok(())
+        }
         Commands::Thread { texts, media } => thread::execute(ctx, format, texts, media).await,
         Commands::Reply { id, text, media } => {
             post::execute(ctx, format, text, Some(id.as_str()), None, media, None, 1440).await

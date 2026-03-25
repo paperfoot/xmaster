@@ -3,6 +3,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/199-biotechnologies/xmaster/stargazers"><img src="https://img.shields.io/github/stars/199-biotechnologies/xmaster?style=social" alt="GitHub stars"></a>
+  <a href="https://crates.io/crates/xmaster"><img src="https://img.shields.io/crates/v/xmaster" alt="crates.io"></a>
+  <a href="https://github.com/199-biotechnologies/xmaster/blob/main/LICENSE"><img src="https://img.shields.io/github/license/199-biotechnologies/xmaster" alt="License"></a>
+</p>
+
+<p align="center">
   <strong>X CLI for humans and agents. Post, search, reply, track; all from the terminal.</strong><br>
   <em>X API v2 + xAI Grok in one Rust binary. Works with Claude Code, any AI agent, or just you.</em>
 </p>
@@ -224,6 +230,7 @@ Posts are stored locally in SQLite — no X Ads API needed, pure local schedulin
 | `agent-info` | Machine-readable capabilities + algorithm weights | `xmaster agent-info` |
 | `rate-limits` | Check API quota status | `xmaster rate-limits` |
 | `update` | Self-update from GitHub releases | `xmaster update` |
+| `star` | Open GitHub repo to star it | `xmaster star` |
 
 ### Global Flags
 

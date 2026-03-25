@@ -335,6 +335,9 @@ pub enum Commands {
         #[arg(long)]
         check: bool,
     },
+
+    /// Open the xmaster GitHub repo to star it
+    Star,
 }
 
 #[derive(Subcommand)]
