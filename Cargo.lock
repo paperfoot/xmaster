@@ -3811,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "xmaster"
-version = "0.5.1"
+version = "0.7.0"
 dependencies = [
  "assert_cmd",
  "async-trait",

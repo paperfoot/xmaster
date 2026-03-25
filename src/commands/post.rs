@@ -89,6 +89,8 @@ pub async fn execute(
                 }
             }
         }
+    } else if format == OutputFormat::Table {
+        eprintln!("Warning: Could not open intelligence store");
     }
 
     // ── Execute the post ──
@@ -109,6 +111,15 @@ pub async fn execute(
     let poll_options: Option<Vec<String>> = poll.map(|p| {
         p.split(',').map(|s| s.trim().to_string()).collect()
     });
+
+    // Validate poll options: 2-4 choices, each max 25 chars
+    if let Some(ref opts) = poll_options {
+        if opts.len() < 2 || opts.len() > 4 || opts.iter().any(|o| o.len() > 25) {
+            return Err(XmasterError::Config(
+                "Poll must have 2-4 options, max 25 chars each".into(),
+            ));
+        }
+    }
 
     let result = api
         .create_tweet(
@@ -155,6 +166,8 @@ pub async fn execute(
             quote_id.as_deref(),
             Some(analysis.score as f64),
         );
+    } else if format == OutputFormat::Table {
+        eprintln!("Warning: Could not open intelligence store");
     }
 
     // ── Build response with intelligence metadata ──

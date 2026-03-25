@@ -27,6 +27,7 @@ pub const ALGORITHM_SOURCE: &str = "twitter/the-algorithm-ml (April 2023, update
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PreflightResult {
+    pub text: String,
     pub score: u32,
     pub grade: String,
     pub issues: Vec<Issue>,
@@ -258,7 +259,14 @@ pub fn analyze(text: &str, goal: Option<&str>) -> PreflightResult {
     let suggestions = suggest_improvements(&issues, &features, goal);
     let suggested_next_commands = build_next_commands(trimmed, score);
 
+    let display_text = if trimmed.len() > 200 {
+        format!("{}...", &trimmed[..200])
+    } else {
+        trimmed.to_string()
+    };
+
     PreflightResult {
+        text: display_text,
         score,
         grade,
         issues,
@@ -492,5 +500,88 @@ mod tests {
             "grade was {}",
             result.grade
         );
+    }
+
+    #[test]
+    fn link_in_body_is_critical() {
+        let result = analyze("Great article https://example.com about Rust", None);
+        let issue = result.issues.iter().find(|i| i.code == "link_in_body").unwrap();
+        assert_eq!(issue.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn engagement_bait_detected() {
+        let result = analyze("Like if you agree with this take on AI", None);
+        assert!(result.issues.iter().any(|i| i.code == "engagement_bait"));
+    }
+
+    #[test]
+    fn starts_with_mention_flagged() {
+        let result = analyze("@elonmusk what do you think about this?", None);
+        assert!(result.issues.iter().any(|i| i.code == "starts_with_mention"));
+    }
+
+    #[test]
+    fn over_280_is_critical() {
+        let long = "x".repeat(281);
+        let result = analyze(&long, None);
+        let issue = result.issues.iter().find(|i| i.code == "over_limit").unwrap();
+        assert_eq!(issue.severity, Severity::Critical);
+        assert!(result.score < 50, "score was {}", result.score);
+    }
+
+    #[test]
+    fn short_question_not_penalized_as_too_short() {
+        // Short questions drive replies (27x weight) — should NOT get "too_short" warning
+        let result = analyze("What's your biggest regret?", None);
+        assert!(result.features.has_question);
+        assert!(
+            !result.issues.iter().any(|i| i.code == "too_short"),
+            "short question should not be flagged as too_short"
+        );
+    }
+
+    #[test]
+    fn specific_numbers_boost_score() {
+        let with_numbers = analyze("3 things I learned building startups in 2024", None);
+        let without_numbers = analyze("Things I learned building startups recently", None);
+        assert!(
+            with_numbers.score > without_numbers.score,
+            "with_numbers={} should beat without_numbers={}",
+            with_numbers.score,
+            without_numbers.score
+        );
+    }
+
+    #[test]
+    fn perfect_tweet_scores_high() {
+        // Numbers + question + line breaks + under 200 chars + proper noun
+        let text = "3 things Google taught me about scaling:\n\n1. Cache everything\n2. Fail fast\n\nWhat would you add?";
+        let result = analyze(text, None);
+        assert!(result.score >= 75, "perfect tweet score was {}", result.score);
+        assert!(
+            result.grade == "A" || result.grade == "B",
+            "grade was {}",
+            result.grade
+        );
+    }
+
+    #[test]
+    fn empty_text_is_critical() {
+        let result = analyze("   ", None);
+        let issue = result.issues.iter().find(|i| i.code == "empty_content").unwrap();
+        assert_eq!(issue.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn rt_if_detected_as_engagement_bait() {
+        let result = analyze("RT if you think Rust is the future of systems programming", None);
+        assert!(result.issues.iter().any(|i| i.code == "engagement_bait"));
+    }
+
+    #[test]
+    fn excessive_hashtags_warned() {
+        let result = analyze("Great day #rust #programming #code #dev", None);
+        assert!(result.issues.iter().any(|i| i.code == "excessive_hashtags"));
     }
 }

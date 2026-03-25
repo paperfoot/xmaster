@@ -247,15 +247,42 @@ pub async fn sync(
         let me = api.get_me().await?;
         me.id
     };
-    let url = format!(
+    let per_page = count.min(100); // API max is 100 per request
+    let base_url = format!(
         "https://api.x.com/2/users/{}/bookmarks?max_results={}&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name",
-        user_id,
-        count.min(100) // API max is 100 per request
+        user_id, per_page
     );
-    let json = crate::providers::oauth2::oauth2_get(&url, &token).await?;
 
-    // Parse response into TweetData
-    let tweets = parse_bookmark_response(&json);
+    // Paginate through all bookmarks until count is reached or no more pages
+    let mut tweets = Vec::new();
+    let mut next_token: Option<String> = None;
+    let mut remaining = count;
+
+    loop {
+        let url = match &next_token {
+            Some(token_val) => format!("{}&pagination_token={}", base_url, token_val),
+            None => base_url.clone(),
+        };
+        let json = crate::providers::oauth2::oauth2_get(&url, &token).await?;
+
+        let page_tweets = parse_bookmark_response(&json);
+        remaining = remaining.saturating_sub(page_tweets.len());
+        tweets.extend(page_tweets);
+
+        // Check for next page
+        next_token = json
+            .get("meta")
+            .and_then(|m| m.get("next_token"))
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string());
+
+        if next_token.is_none() || remaining == 0 {
+            break;
+        }
+    }
+
+    // Trim to requested count
+    tweets.truncate(count);
     let store = BookmarkStore::open()?;
     let result = store.sync(tweets)?;
 

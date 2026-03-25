@@ -1010,8 +1010,21 @@ impl XApi {
             .and_then(|v| v.as_u64())
             .unwrap_or(5);
 
+        const MAX_RETRIES: u32 = 30;
+        const MAX_TOTAL_SECS: u64 = 300; // 5 minutes
+        let mut attempts = 0u32;
+        let mut elapsed_secs = 0u64;
+
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(check_after)).await;
+            elapsed_secs += check_after;
+            attempts += 1;
+
+            if attempts > MAX_RETRIES || elapsed_secs > MAX_TOTAL_SECS {
+                return Err(XmasterError::Media(
+                    "Upload processing timed out".into(),
+                ));
+            }
 
             let url = format!("{UPLOAD_URL}?command=STATUS&media_id={media_id}");
 

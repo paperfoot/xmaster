@@ -186,3 +186,71 @@ fn json_and_quiet_together() {
         .success()
         .stdout(predicate::str::contains("\"status\": \"success\""));
 }
+
+// ─── Analyze (Preflight) ────────────────────────────────────────
+
+#[test]
+fn analyze_command_returns_score() {
+    xmaster()
+        .args(["analyze", "Hello world", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"score\""))
+        .stdout(predicate::str::contains("\"grade\""));
+}
+
+// ─── Thread ─────────────────────────────────────────────────────
+
+#[test]
+fn thread_requires_at_least_one_tweet() {
+    xmaster().args(["thread"]).assert().failure();
+}
+
+// ─── Schedule ───────────────────────────────────────────────────
+
+#[test]
+fn schedule_list_empty() {
+    xmaster()
+        .args(["schedule", "list", "--json"])
+        .assert()
+        .success();
+}
+
+// ─── Bookmarks ──────────────────────────────────────────────────
+
+#[test]
+fn bookmarks_stats_without_db() {
+    xmaster()
+        .env("XMASTER_CONFIG_DIR", "/tmp/xmaster-test-bm-nonexistent")
+        .args(["bookmarks", "stats", "--json"])
+        .assert(); // should not panic
+}
+
+// ─── Config Guide ───────────────────────────────────────────────
+
+#[test]
+fn config_guide_works() {
+    xmaster()
+        .args(["config", "guide", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"steps\""));
+}
+
+// ─── Suggest & Report ───────────────────────────────────────────
+
+#[test]
+fn suggest_next_post_no_panic() {
+    xmaster()
+        .args(["suggest", "next-post", "--json"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn report_daily_no_panic() {
+    xmaster()
+        .args(["report", "daily", "--json"])
+        .assert()
+        .success();
+}

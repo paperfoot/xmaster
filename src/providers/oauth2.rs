@@ -22,6 +22,16 @@ const TOKEN_URL: &str = "https://api.x.com/2/oauth2/token";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
 const SCOPES: &str = "tweet.read tweet.write users.read bookmark.read bookmark.write offline.access";
 
+/// Build a shared reqwest client for OAuth2 operations with proper timeout and user-agent.
+fn build_oauth2_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .user_agent(format!("xmaster/{}", env!("CARGO_PKG_VERSION")))
+        .pool_idle_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .expect("failed to build OAuth2 HTTP client")
+}
+
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -183,7 +193,7 @@ async fn exchange_code(
     code: &str,
     code_verifier: &str,
 ) -> Result<TokenResponse, XmasterError> {
-    let client = reqwest::Client::new();
+    let client = build_oauth2_client();
 
     let params = [
         ("code", code),
@@ -218,7 +228,7 @@ async fn refresh_token_request(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<TokenResponse, XmasterError> {
-    let client = reqwest::Client::new();
+    let client = build_oauth2_client();
 
     let params = [
         ("grant_type", "refresh_token"),
@@ -279,13 +289,18 @@ fn save_tokens(access_token: &str, refresh_token: Option<&str>) -> Result<(), Xm
 
     let toml_str = toml::to_string_pretty(&doc)
         .map_err(|e| XmasterError::Config(format!("Serialize error: {e}")))?;
-    std::fs::write(&path, toml_str)?;
+
+    // Atomic write: write to temp file then rename to prevent partial writes
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &toml_str)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600))?;
     }
+
+    std::fs::rename(&tmp_path, &path)?;
 
     Ok(())
 }
@@ -338,7 +353,7 @@ pub async fn oauth2_get(
     url: &str,
     access_token: &str,
 ) -> Result<serde_json::Value, XmasterError> {
-    let client = reqwest::Client::new();
+    let client = build_oauth2_client();
     let resp = client
         .get(url)
         .header("Authorization", format!("Bearer {access_token}"))

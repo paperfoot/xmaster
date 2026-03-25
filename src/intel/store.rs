@@ -452,8 +452,9 @@ impl IntelStore {
     /// Recalculate the `timing_stats` table from raw posts + snapshots.
     pub fn update_timing_stats(&self) -> Result<(), rusqlite::Error> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute_batch("DELETE FROM timing_stats")?;
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch("DELETE FROM timing_stats")?;
+        tx.execute(
             "INSERT INTO timing_stats
                 (day_of_week, hour_of_day, content_type,
                  avg_impressions, avg_engagement_rate, sample_count, last_updated)
@@ -470,7 +471,7 @@ impl IntelStore {
             params![now],
         )?;
         // Also insert an 'all' row per slot
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO timing_stats
                 (day_of_week, hour_of_day, content_type,
                  avg_impressions, avg_engagement_rate, sample_count, last_updated)
@@ -486,6 +487,7 @@ impl IntelStore {
              GROUP BY p.day_of_week, p.hour_of_day",
             params![now],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -519,5 +521,120 @@ impl IntelStore {
                 },
             )
             .map(|opt| opt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn test_store() -> IntelStore {
+        let dir = tempdir().unwrap();
+        std::env::set_var("XMASTER_CONFIG_DIR", dir.path());
+        let store = IntelStore::open().unwrap();
+        // Keep tempdir alive by leaking it (tests are short-lived)
+        std::mem::forget(dir);
+        store
+    }
+
+    #[test]
+    fn log_and_retrieve_post() {
+        let store = test_store();
+        store
+            .log_post("tweet_001", "Hello world!", "opinion", None, None, Some(85.0))
+            .unwrap();
+
+        let posts = store.get_post_history(10).unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].tweet_id, "tweet_001");
+        assert_eq!(posts[0].text, "Hello world!");
+        assert_eq!(posts[0].content_type, "opinion");
+        assert_eq!(posts[0].preflight_score, Some(85.0));
+        assert!(posts[0].latest_metrics.is_none());
+    }
+
+    #[test]
+    fn duplicate_tweet_id_ignored() {
+        let store = test_store();
+        store
+            .log_post("tweet_dup", "First", "opinion", None, None, None)
+            .unwrap();
+        // INSERT OR IGNORE — second insert should not fail or create duplicate
+        store
+            .log_post("tweet_dup", "Second", "opinion", None, None, None)
+            .unwrap();
+
+        let posts = store.get_post_history(10).unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].text, "First"); // original text preserved
+    }
+
+    #[test]
+    fn engagement_logging() {
+        let store = test_store();
+        store
+            .log_engagement("like", Some("t_100"), None, Some("testuser"), Some(5000))
+            .unwrap();
+        store
+            .log_engagement("reply", Some("t_101"), None, Some("testuser"), Some(5000))
+            .unwrap();
+
+        let info = store.get_engagement_reciprocity("testuser").unwrap();
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.total_engagements, 2);
+    }
+
+    #[test]
+    fn timing_heatmap_empty_db() {
+        let store = test_store();
+        let heatmap = store.get_timing_heatmap().unwrap();
+        assert!(heatmap.is_empty());
+    }
+
+    #[test]
+    fn recent_velocity_empty_db() {
+        let store = test_store();
+        let velocity = store.get_recent_post_velocity().unwrap();
+        assert_eq!(velocity.posts_1h, 0);
+        assert_eq!(velocity.posts_6h, 0);
+        assert_eq!(velocity.posts_24h, 0);
+        assert!(velocity.accelerating_post.is_none());
+    }
+
+    #[test]
+    fn metric_snapshot_and_retrieval() {
+        let store = test_store();
+        store
+            .log_post("tweet_metrics", "Test post", "opinion", None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("tweet_metrics", 10, 5, 3, 1000, 2, 1, 50, 60)
+            .unwrap();
+
+        let posts = store.get_post_history(10).unwrap();
+        assert_eq!(posts.len(), 1);
+        let metrics = posts[0].latest_metrics.as_ref().unwrap();
+        assert_eq!(metrics.likes, 10);
+        assert_eq!(metrics.retweets, 5);
+        assert_eq!(metrics.replies, 3);
+        assert_eq!(metrics.impressions, 1000);
+        assert_eq!(metrics.bookmarks, 2);
+        assert!(metrics.engagement_rate > 0.0);
+    }
+
+    #[test]
+    fn engagement_reciprocity_unknown_user() {
+        let store = test_store();
+        let info = store.get_engagement_reciprocity("nobody").unwrap();
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn update_timing_stats_empty_db() {
+        let store = test_store();
+        // Should not fail on empty database
+        store.update_timing_stats().unwrap();
     }
 }

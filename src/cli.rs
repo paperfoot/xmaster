@@ -499,11 +499,75 @@ pub enum BookmarkCommands {
 
 /// Parse a tweet ID from a URL or raw ID string
 pub fn parse_tweet_id(input: &str) -> String {
+    let input = input.trim();
     if input.contains("x.com/") || input.contains("twitter.com/") {
-        if let Some(id) = input.split('/').last() {
+        // Filter empty segments (handles trailing slashes) and take the last non-empty one
+        if let Some(id) = input.split('/').filter(|s| !s.is_empty()).last() {
+            // Strip query params (?s=20 etc.)
             let id = id.split('?').next().unwrap_or(id);
-            return id.to_string();
+            if !id.is_empty() {
+                // Warn if the extracted segment contains non-digit chars
+                if !id.chars().all(|c| c.is_ascii_digit()) {
+                    eprintln!("Warning: extracted tweet ID '{id}' contains non-numeric characters");
+                }
+                return id.to_string();
+            }
         }
     }
     input.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_id() {
+        assert_eq!(parse_tweet_id("1234567890"), "1234567890");
+    }
+
+    #[test]
+    fn x_url() {
+        assert_eq!(
+            parse_tweet_id("https://x.com/user/status/1234567890"),
+            "1234567890"
+        );
+    }
+
+    #[test]
+    fn twitter_url() {
+        assert_eq!(
+            parse_tweet_id("https://twitter.com/user/status/1234567890"),
+            "1234567890"
+        );
+    }
+
+    #[test]
+    fn url_with_query() {
+        assert_eq!(
+            parse_tweet_id("https://x.com/user/status/1234567890?s=20"),
+            "1234567890"
+        );
+    }
+
+    #[test]
+    fn url_with_trailing_slash() {
+        assert_eq!(
+            parse_tweet_id("https://x.com/user/status/1234567890/"),
+            "1234567890"
+        );
+    }
+
+    #[test]
+    fn url_with_multiple_query_params() {
+        assert_eq!(
+            parse_tweet_id("https://x.com/user/status/9876543210?s=20&t=abc"),
+            "9876543210"
+        );
+    }
+
+    #[test]
+    fn whitespace_trimmed() {
+        assert_eq!(parse_tweet_id("  1234567890  "), "1234567890");
+    }
 }
