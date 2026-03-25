@@ -357,6 +357,8 @@ fn parse_bookmark_response(json: &serde_json::Value) -> Vec<crate::providers::xa
             author_id: Some(author_id),
             author_username: Some(username),
             created_at,
+            conversation_id: None,
+            referenced_tweets: None,
             public_metrics: metrics,
             author_followers: None,
             media_urls: vec![],

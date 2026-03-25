@@ -59,6 +59,10 @@ pub struct TweetData {
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub referenced_tweets: Option<Vec<ReferencedTweet>>,
+    #[serde(default)]
     pub public_metrics: Option<TweetMetrics>,
     /// Author's follower count (populated from includes.users)
     #[serde(default)]
@@ -66,6 +70,13 @@ pub struct TweetData {
     /// Media URLs (populated from includes.media)
     #[serde(default)]
     pub media_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferencedTweet {
+    #[serde(rename = "type")]
+    pub ref_type: String,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,7 +476,7 @@ impl XApi {
     // -- Tweet fields query string helpers ----------------------------------
 
     fn tweet_fields() -> &'static str {
-        "tweet.fields=created_at,public_metrics,author_id,conversation_id,entities,lang,attachments"
+        "tweet.fields=created_at,public_metrics,author_id,conversation_id,referenced_tweets,entities,lang,attachments"
     }
 
     fn tweet_expansions() -> &'static str {
@@ -804,15 +815,49 @@ impl XApi {
         Ok(tweet)
     }
 
-    /// Get replies to a tweet using conversation_id search (last 7 days).
+    /// Get replies to a tweet (last 7 days).
+    ///
+    /// The conversation_id of a reply equals the root tweet of the thread, not
+    /// the reply's own ID.  So we first fetch the target tweet to learn its
+    /// conversation_id, search the whole conversation, then filter to only
+    /// direct replies to the target tweet.
     pub async fn get_replies(
         &self,
         tweet_id: &str,
         count: usize,
     ) -> Result<Vec<TweetData>, XmasterError> {
+        // 1. Fetch the target tweet to get its conversation_id
+        let target = self.get_tweet(tweet_id).await?;
+        let conv_id = target
+            .conversation_id
+            .as_deref()
+            .unwrap_or(tweet_id);
+
+        // 2. Search the full conversation
         let max = count.clamp(10, 100);
-        let query = format!("conversation_id:{tweet_id}");
-        self.search_tweets(&query, "recency", max).await
+        let query = format!("conversation_id:{conv_id}");
+        let all = self.search_tweets(&query, "recency", max).await?;
+
+        // 3. Filter to direct replies to the target tweet
+        let replies: Vec<TweetData> = all
+            .into_iter()
+            .filter(|t| {
+                // Exclude the target tweet itself
+                if t.id == tweet_id {
+                    return false;
+                }
+                // Keep tweets that reference the target as replied_to
+                t.referenced_tweets
+                    .as_ref()
+                    .map(|refs| {
+                        refs.iter()
+                            .any(|r| r.ref_type == "replied_to" && r.id == tweet_id)
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        Ok(replies)
     }
 
     pub async fn delete_tweet(&self, id: &str) -> Result<(), XmasterError> {

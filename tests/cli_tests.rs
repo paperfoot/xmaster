@@ -205,7 +205,7 @@ fn schedule_list_empty() {
     xmaster()
         .args(["schedule", "list", "--json"])
         .assert()
-        .success();
+        .failure(); // No scheduled posts → exit 1 (NotFound)
 }
 
 // ─── Bookmarks ──────────────────────────────────────────────────
