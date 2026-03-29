@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/199-biotechnologies/xmaster/stargazers"><img src="https://img.shields.io/github/stars/199-biotechnologies/xmaster?style=social" alt="GitHub stars"></a>
+  <a href="https://x.com/longevityboris"><img src="https://img.shields.io/badge/follow-%40longevityboris-black?logo=x&style=social" alt="Follow on X"></a>
   <a href="https://crates.io/crates/xmaster"><img src="https://img.shields.io/crates/v/xmaster" alt="crates.io"></a>
   <a href="https://github.com/199-biotechnologies/xmaster/blob/main/LICENSE"><img src="https://img.shields.io/github/license/199-biotechnologies/xmaster" alt="License"></a>
 </p>
@@ -437,10 +438,17 @@ cargo build --release
 # Binary at target/release/xmaster
 ```
 
+## Works With
+
+- [Claude Code](https://github.com/anthropics/claude-code) — as a native skill or bash tool
+- [OpenClaw](https://github.com/openclaw/openclaw) — as a skill (`skills/xmaster`)
+- Any AI agent that can shell out and parse JSON
+
 ## License
 
 MIT
 
 ---
 
-Created by [Boris Djordjevic](https://x.com/longevityboris) — [199 Biotechnologies](https://github.com/199-biotechnologies) & Paperfoot AI (SG) Pte Ltd.
+Built by [Boris Djordjevic](https://x.com/longevityboris) at [199 Biotechnologies](https://github.com/199-biotechnologies).
+Building longevity tools, pet health AI, and open source CLIs. Follow along on [X](https://x.com/longevityboris).
