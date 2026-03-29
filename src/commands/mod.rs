@@ -25,7 +25,7 @@ pub mod skill_cmd;
 pub mod replies;
 pub mod read_post;
 
-use crate::cli::{Cli, Commands, ConfigCommands, DmCommands, EngageCommands, ListCommands, TrackCommands, ReportCommands, SuggestCommands, ScheduleCommands, BookmarkCommands, SkillCommands};
+use crate::cli::{Cli, Commands, ConfigCommands, DmCommands, EngageCommands, WatchlistCommands, ListCommands, TrackCommands, ReportCommands, SuggestCommands, ScheduleCommands, BookmarkCommands, SkillCommands};
 use crate::context::AppContext;
 use crate::errors::XmasterError;
 use crate::output::OutputFormat;
@@ -92,6 +92,13 @@ pub async fn dispatch(
             EngageCommands::Feed { topic, min_followers, max_age_mins, count } => {
                 engage_recommend::feed(ctx, format, topic, *min_followers, *max_age_mins, *count).await
             }
+            EngageCommands::Watchlist { action } => match action {
+                WatchlistCommands::Add { username, topic } => {
+                    engage_recommend::watchlist_add(ctx, format, username, topic.as_deref()).await
+                }
+                WatchlistCommands::List => engage_recommend::watchlist_list(format).await,
+                WatchlistCommands::Remove { username } => engage_recommend::watchlist_remove(format, username).await,
+            },
         },
         Commands::Update { check } => update::execute(*check).await,
         Commands::Star => {
