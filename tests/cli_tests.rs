@@ -241,8 +241,15 @@ fn suggest_next_post_no_panic() {
 
 #[test]
 fn report_daily_no_panic() {
-    xmaster()
+    // report daily returns NotFound (exit 1) when no posts exist — expected in CI.
+    // We test it doesn't crash, not that it has data.
+    let output = xmaster()
         .args(["report", "daily", "--json"])
-        .assert()
-        .success();
+        .output()
+        .expect("failed to run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"status\"") || stdout.contains("\"version\""),
+        "Should return valid JSON envelope, got: {stdout}"
+    );
 }
