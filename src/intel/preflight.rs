@@ -1,23 +1,16 @@
 use serde::Serialize;
 
-/// Algorithm intelligence from the open-source X ranking code.
-/// Source: xai-org/x-algorithm (January 2026) — Grok-based transformer.
+/// Heuristic post quality analysis. Checks for common patterns that hurt or
+/// help reach based on estimated 2026 X algorithm signals. This is NOT a direct
+/// algorithm score — it's a quality lint.
 ///
-/// The 2026 algorithm uses 19 engagement signals (15 positive, 4 negative)
-/// combined via WeightedScorer. Exact weight constants are NOT published
-/// (in unpublished params.rs). Estimates below from code structure + empirical data.
-///
-/// Scoring formula: Final Score = Σ(weight_i × P(action_i))
-///   where P(action_i) comes from Grok transformer predictions.
+/// Reference: xai-org/x-algorithm (January 2026, Grok-based transformer).
+/// Exact weight constants are NOT published. Estimates below from code structure
+/// + empirical data.
 ///
 /// Top positive signals (estimated): follow_author (~30x), share_via_dm (~25x),
 ///   reply (~20x), share_via_copy_link (~20x), quote (~18x), profile_click (~12x)
 /// Negative signals: report (~-369x), block (~-74x), mute (~-40x), not_interested (~-20x)
-///
-/// Key 2026 changes: No TweepCred, no SimClusters, no reply_engaged_by_author (removed),
-///   bookmarks NOT a signal, DM shares are a new separate high-value signal.
-///
-/// Source: github.com/xai-org/x-algorithm (weighted_scorer.rs, phoenix_scorer.rs)
 pub const ALGORITHM_SOURCE: &str = "xai-org/x-algorithm (January 2026, Grok-based)";
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,7 +204,7 @@ pub fn analyze(text: &str, goal: Option<&str>) -> PreflightResult {
         issues.push(Issue {
             severity: Severity::Info,
             code: "no_question".into(),
-            message: "No question mark — questions drive replies (~20x weight)".into(),
+            message: "No question mark — questions drive replies (~20x weight, estimated)".into(),
             fix: Some("Consider ending with a question to invite discussion".into()),
         });
         score -= 5;
@@ -242,7 +235,7 @@ pub fn analyze(text: &str, goal: Option<&str>) -> PreflightResult {
         score += 10;
     }
     if features.has_question {
-        // Questions always help (27x weight in algorithm)
+        // Questions always help (~20x weight in algorithm, estimated)
         score += 5;
         if goal == Some("replies") {
             score += 10; // Extra boost when replies is the explicit goal
@@ -296,8 +289,8 @@ pub fn analyze(text: &str, goal: Option<&str>) -> PreflightResult {
     let suggestions = suggest_improvements(&issues, &features, goal);
     let suggested_next_commands = build_next_commands(trimmed, score);
 
-    let display_text = if trimmed.len() > 200 {
-        format!("{}...", &trimmed[..200])
+    let display_text = if trimmed.chars().count() > 200 {
+        format!("{}...", crate::utils::safe_truncate(trimmed, 200))
     } else {
         trimmed.to_string()
     };
@@ -314,7 +307,7 @@ pub fn analyze(text: &str, goal: Option<&str>) -> PreflightResult {
 }
 
 fn extract_features(text: &str) -> FeatureVector {
-    let char_count = text.len();
+    let char_count = text.chars().count();
     let word_count = text.split_whitespace().count();
     let line_count = text.lines().count();
 
@@ -614,7 +607,7 @@ mod tests {
 
     #[test]
     fn short_question_not_penalized_as_too_short() {
-        // Short questions drive replies (27x weight) — should NOT get "too_short" warning
+        // Short questions drive replies (~20x estimated weight) — should NOT get "too_short" warning
         let result = analyze("What's your biggest regret?", None);
         assert!(result.features.has_question);
         assert!(

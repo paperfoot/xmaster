@@ -242,7 +242,6 @@ Posts are stored locally in SQLite — no X Ads API needed, pure local schedulin
 | Flag | Description |
 |------|-------------|
 | `--json` | Force JSON output (auto-enabled when piped) |
-| `--quiet` | Suppress non-essential output |
 
 ### Post Options
 
@@ -392,7 +391,7 @@ export XMASTER_SETTINGS__TIMEOUT=30
 │ Timeline)│ search       │  replies          │
 ├──────────┴──────────────┴───────────────────┤
 │  Rate Limiter │ Intel Store │ Scheduler     │
-│  (governor)   │  (SQLite)   │  (launchd)    │
+│  (header-based)│  (SQLite)  │  (launchd)    │
 ├─────────────────────────────────────────────┤
 │             Config (figment)                │
 │   TOML + env vars + browser cookies         │
@@ -401,16 +400,16 @@ export XMASTER_SETTINGS__TIMEOUT=30
 
 ### Key Design Decisions
 
-- **OAuth 1.0a signing** — Full RFC 5849 implementation for X API v2. No SDK dependency.
+- **OAuth 1.0a signing** — X API v2 authentication via `reqwest-oauth1`.
 - **Dual search** — `search` uses X API v2 (structured, filterable). `search-ai` uses xAI/Grok (semantic, AI-powered).
-- **Token bucket rate limiting** — `governor` crate provides per-provider rate limiting to stay within API quotas.
+- **Rate-limit aware** — Parses `x-rate-limit-*` headers and backs off automatically when hitting API quotas.
 - **Auto-JSON detection** — Output is JSON when piped, human-readable tables when in a terminal.
 - **URL or ID** — Engagement commands accept both tweet URLs and raw IDs.
 - **Media uploads** — Chunked upload flow with base64 encoding for images and video.
 
 ## Rate Limits
 
-xmaster respects X API v2 rate limits with per-endpoint token bucket limiting:
+xmaster respects X API v2 rate limits by parsing response headers and backing off when needed:
 
 | Endpoint | Rate Limit |
 |----------|-----------|

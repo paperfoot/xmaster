@@ -75,14 +75,14 @@ async fn signed_request(
         return Err(XmasterError::Api {
             provider: "x",
             code: "api_error",
-            message: format!("HTTP {status}: {}", &text[..text.len().min(200)]),
+            message: format!("HTTP {status}: {}", crate::utils::safe_truncate(&text, 200)),
         });
     }
 
     serde_json::from_str(&text).map_err(|_| XmasterError::Api {
         provider: "x",
         code: "json_parse",
-        message: format!("Failed to parse: {}", &text[..text.len().min(200)]),
+        message: format!("Failed to parse: {}", crate::utils::safe_truncate(&text, 200)),
     })
 }
 

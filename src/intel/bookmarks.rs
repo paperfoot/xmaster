@@ -83,6 +83,9 @@ impl BookmarkStore {
         let conn = Connection::open(db_path).map_err(|e| {
             XmasterError::Config(format!("Failed to open bookmark database: {e}"))
         })?;
+        conn.pragma_update(None, "journal_mode", "wal").ok();
+        conn.pragma_update(None, "busy_timeout", 5000).ok();
+        conn.pragma_update(None, "synchronous", "NORMAL").ok();
         let store = Self { conn };
         store.init_tables()?;
         Ok(store)

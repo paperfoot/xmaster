@@ -303,7 +303,7 @@ pub enum Commands {
     Analyze {
         /// Tweet text to analyze
         text: String,
-        /// Optimization goal (replies, impressions, bookmarks)
+        /// Optimization goal (replies, impressions)
         #[arg(long)]
         goal: Option<String>,
     },

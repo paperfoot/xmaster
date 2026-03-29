@@ -399,7 +399,7 @@ impl XApi {
         let val: Value = serde_json::from_str(&text).map_err(|_| XmasterError::Api {
             provider: "x",
             code: "json_parse",
-            message: format!("Failed to parse response: {}", &text[..text.len().min(200)]),
+            message: format!("Failed to parse response: {}", crate::utils::safe_truncate(&text, 200)),
         })?;
 
         if !status.is_success() {
@@ -759,7 +759,7 @@ impl XApi {
                 code: "graphql_error",
                 message: format!(
                     "Web fallback failed (HTTP {status}): {}",
-                    &body_text[..body_text.len().min(300)]
+                    crate::utils::safe_truncate(&body_text, 300)
                 ),
             });
         }
@@ -768,7 +768,7 @@ impl XApi {
         let val: Value = serde_json::from_str(&body_text).map_err(|_| XmasterError::Api {
             provider: "x-web",
             code: "json_parse",
-            message: format!("Failed to parse GraphQL response: {}", &body_text[..body_text.len().min(200)]),
+            message: format!("Failed to parse GraphQL response: {}", crate::utils::safe_truncate(&body_text, 200)),
         })?;
 
         // Navigate: data.create_tweet.tweet_results.result.rest_id
@@ -777,7 +777,7 @@ impl XApi {
             .ok_or_else(|| XmasterError::Api {
                 provider: "x-web",
                 code: "no_tweet_result",
-                message: format!("Unexpected GraphQL response shape: {}", &body_text[..body_text.len().min(300)]),
+                message: format!("Unexpected GraphQL response shape: {}", crate::utils::safe_truncate(&body_text, 300)),
             })?;
 
         let tweet_id = tweet_result

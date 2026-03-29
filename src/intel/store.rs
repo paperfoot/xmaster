@@ -94,6 +94,9 @@ impl IntelStore {
         std::fs::create_dir_all(&dir).ok();
         let db_path: PathBuf = dir.join("xmaster.db");
         let conn = Connection::open(db_path)?;
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         let store = Self { conn };
         store.init_tables()?;
         Ok(store)

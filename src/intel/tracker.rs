@@ -123,6 +123,12 @@ impl PostTracker {
         let db_path: PathBuf = dir.join("xmaster.db");
         let conn = Connection::open(db_path)
             .map_err(|e| XmasterError::Config(format!("DB open error: {e}")))?;
+        conn.pragma_update(None, "journal_mode", "wal")
+            .map_err(|e| XmasterError::Config(format!("DB pragma error: {e}")))?;
+        conn.pragma_update(None, "busy_timeout", 5000)
+            .map_err(|e| XmasterError::Config(format!("DB pragma error: {e}")))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| XmasterError::Config(format!("DB pragma error: {e}")))?;
 
         // Ensure required tables exist (safe on fresh install)
         conn.execute_batch(
@@ -293,7 +299,7 @@ impl PostTracker {
                 "SELECT p.day_of_week, p.hour_of_day,
                         AVG(ms.impressions) AS avg_imp,
                         AVG(CASE WHEN ms.impressions > 0
-                             THEN (ms.likes + ms.retweets + ms.replies + ms.bookmarks) * 1.0
+                             THEN (ms.likes + ms.retweets + ms.replies + ms.quotes) * 1.0
                                   / ms.impressions ELSE 0 END) AS avg_er,
                         COUNT(DISTINCT p.tweet_id) AS cnt
                  FROM posts p
@@ -344,7 +350,7 @@ impl PostTracker {
                     "SELECT p.day_of_week, p.hour_of_day,
                             AVG(ms.impressions),
                             AVG(CASE WHEN ms.impressions > 0
-                                 THEN (ms.likes+ms.retweets+ms.replies+ms.bookmarks)*1.0
+                                 THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
                                       / ms.impressions ELSE 0 END),
                             COUNT(DISTINCT p.tweet_id)
                      FROM posts p
@@ -375,7 +381,7 @@ impl PostTracker {
                     "SELECT p.day_of_week, p.hour_of_day,
                             AVG(ms.impressions),
                             AVG(CASE WHEN ms.impressions > 0
-                                 THEN (ms.likes+ms.retweets+ms.replies+ms.bookmarks)*1.0
+                                 THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
                                       / ms.impressions ELSE 0 END),
                             COUNT(DISTINCT p.tweet_id)
                      FROM posts p
@@ -445,7 +451,7 @@ impl PostTracker {
         let current_velocity: f64 = self
             .conn
             .query_row(
-                "SELECT (likes + retweets + replies + bookmarks) * 1.0
+                "SELECT (likes + retweets + replies + quotes) * 1.0
                  FROM metric_snapshots
                  WHERE tweet_id = ?1
                  ORDER BY id DESC LIMIT 1",
@@ -494,7 +500,7 @@ impl PostTracker {
                         COALESCE(ms.impressions, 0),
                         CASE WHEN COALESCE(ms.impressions, 0) > 0
                              THEN (COALESCE(ms.likes,0) + COALESCE(ms.retweets,0)
-                                   + COALESCE(ms.replies,0) + COALESCE(ms.bookmarks,0)) * 1.0
+                                   + COALESCE(ms.replies,0) + COALESCE(ms.quotes,0)) * 1.0
                                   / ms.impressions
                              ELSE 0 END AS er
                  FROM posts p
@@ -584,7 +590,7 @@ impl PostTracker {
                 "SELECT AVG(
                     CASE WHEN COALESCE(ms.impressions, 0) > 0
                          THEN (COALESCE(ms.likes,0)+COALESCE(ms.retweets,0)
-                               +COALESCE(ms.replies,0)+COALESCE(ms.bookmarks,0))*1.0
+                               +COALESCE(ms.replies,0)+COALESCE(ms.quotes,0))*1.0
                               / ms.impressions
                          ELSE 0 END
                  )
@@ -642,7 +648,7 @@ impl PostTracker {
                         (SELECT MAX(ms.snapshot_at) FROM metric_snapshots ms WHERE ms.tweet_id = p.tweet_id) AS last_snap,
                         (SELECT ms.impressions FROM metric_snapshots ms WHERE ms.tweet_id = p.tweet_id ORDER BY ms.id DESC LIMIT 1),
                         (SELECT CASE WHEN ms.impressions > 0
-                                     THEN (ms.likes+ms.retweets+ms.replies+ms.bookmarks)*1.0 / ms.impressions
+                                     THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0 / ms.impressions
                                      ELSE 0 END
                          FROM metric_snapshots ms WHERE ms.tweet_id = p.tweet_id ORDER BY ms.id DESC LIMIT 1)
                  FROM posts p
@@ -698,7 +704,7 @@ impl PostTracker {
                  SELECT p.day_of_week, p.hour_of_day, 'all',
                         AVG(ms.impressions),
                         AVG(CASE WHEN ms.impressions > 0
-                             THEN (ms.likes+ms.retweets+ms.replies+ms.bookmarks)*1.0
+                             THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
                                   / ms.impressions ELSE 0 END),
                         COUNT(DISTINCT p.tweet_id),
                         ?1

@@ -9,6 +9,7 @@ pub mod intel;
 mod output;
 mod providers;
 mod star_nudge;
+pub mod utils;
 
 use clap::Parser;
 use cli::Cli;

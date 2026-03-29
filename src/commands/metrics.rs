@@ -222,7 +222,7 @@ async fn fetch_tweet_metrics(
         let text = resp.text().await.unwrap_or_default();
         return Err(XmasterError::NotFound(format!(
             "Tweet {tweet_id} (HTTP {status}: {})",
-            &text[..text.len().min(100)]
+            crate::utils::safe_truncate(&text, 100)
         )));
     }
 

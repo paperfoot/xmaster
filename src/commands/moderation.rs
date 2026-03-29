@@ -83,7 +83,7 @@ async fn signed_request(
         return Err(XmasterError::Api {
             provider: "x",
             code: "api_error",
-            message: format!("HTTP {status}: {}", &text[..text.len().min(200)]),
+            message: format!("HTTP {status}: {}", crate::utils::safe_truncate(&text, 200)),
         });
     }
 

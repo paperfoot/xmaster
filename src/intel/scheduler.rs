@@ -64,6 +64,9 @@ impl PostScheduler {
         std::fs::create_dir_all(&dir).ok();
         let db_path: PathBuf = dir.join("xmaster.db");
         let conn = Connection::open(db_path).map_err(|e| XmasterError::Config(e.to_string()))?;
+        conn.pragma_update(None, "journal_mode", "wal").ok();
+        conn.pragma_update(None, "busy_timeout", 5000).ok();
+        conn.pragma_update(None, "synchronous", "NORMAL").ok();
         let sched = Self { conn };
         sched.init_tables()?;
         Ok(sched)
@@ -435,7 +438,7 @@ impl PostScheduler {
                         self.conn
                             .execute(
                                 "UPDATE scheduled_posts
-                                 SET retry_count = ?1, last_error = ?2
+                                 SET status = 'pending', retry_count = ?1, last_error = ?2
                                  WHERE id = ?3",
                                 params![new_retry, err_msg, id],
                             )
