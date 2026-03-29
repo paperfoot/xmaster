@@ -412,20 +412,43 @@ impl PostScheduler {
                         )
                         .map_err(|e| XmasterError::Config(e.to_string()))?;
 
-                    // Record to intel store
+                    // Record to intel store with context-aware analysis
                     if let Ok(store) = IntelStore::open() {
-                        let pf = preflight::analyze(content, &AnalyzeContext::default());
+                        let is_reply = reply_to.is_some();
+                        let is_quote = quote.is_some();
+                        let has_media = media_ids.as_ref().map_or(false, |m| !m.is_empty());
+                        let mode = if is_reply {
+                            preflight::PostMode::Reply
+                        } else if is_quote {
+                            preflight::PostMode::Quote
+                        } else {
+                            preflight::PostMode::Standalone
+                        };
+                        let ctx = AnalyzeContext {
+                            mode: Some(mode),
+                            has_media,
+                            ..AnalyzeContext::default()
+                        };
+                        let pf = preflight::analyze(content, &ctx);
                         let analysis_json = serde_json::to_string(&pf).ok();
+                        let content_type = if is_reply { "reply" } else if is_quote { "quote" } else { "scheduled" };
                         let _ = store.record_published_post(
                             &tweet.id,
                             content,
-                            "scheduled",
+                            content_type,
                             reply_to.as_deref(),
                             quote.as_deref(),
                             Some(pf.score as f64),
                             analysis_json.as_deref(),
                             Some(id),
                         );
+                        // Track reply style for scheduled replies
+                        if is_reply {
+                            if let Some(ref target_id) = reply_to {
+                                let style = crate::intel::store::IntelStore::classify_reply_style(content);
+                                let _ = store.log_reply(target_id, None, None, None, &tweet.id, Some(&style));
+                            }
+                        }
                     }
 
                     result.fired += 1;

@@ -248,41 +248,38 @@ impl IntelStore {
             ",
         )?;
 
-        // Safe migrations: add columns if not present
-        let cols: Vec<String> = self.conn
-            .prepare("PRAGMA table_info(engagement_actions)")?
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<Result<Vec<_>, _>>()?;
-        if !cols.iter().any(|c| c == "reply_tweet_id") {
-            self.conn.execute_batch(
-                "ALTER TABLE engagement_actions ADD COLUMN reply_tweet_id TEXT;"
-            )?;
-        }
-        if !cols.iter().any(|c| c == "reply_style") {
-            self.conn.execute_batch(
-                "ALTER TABLE engagement_actions ADD COLUMN reply_style TEXT;"
-            )?;
-        }
+        // Safe migrations: add columns if not present (transaction for atomicity)
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let migrate_result = (|| -> Result<(), rusqlite::Error> {
+            let cols: Vec<String> = self.conn
+                .prepare("PRAGMA table_info(engagement_actions)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !cols.iter().any(|c| c == "reply_tweet_id") {
+                self.conn.execute_batch("ALTER TABLE engagement_actions ADD COLUMN reply_tweet_id TEXT;")?;
+            }
+            if !cols.iter().any(|c| c == "reply_style") {
+                self.conn.execute_batch("ALTER TABLE engagement_actions ADD COLUMN reply_style TEXT;")?;
+            }
 
-        // Safe migration: add analysis columns to posts if not present
-        let post_cols: Vec<String> = self.conn
-            .prepare("PRAGMA table_info(posts)")?
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<Result<Vec<_>, _>>()?;
-        if !post_cols.iter().any(|c| c == "analysis_json") {
-            self.conn.execute_batch(
-                "ALTER TABLE posts ADD COLUMN analysis_json TEXT;"
-            )?;
-        }
-        if !post_cols.iter().any(|c| c == "analysis_version") {
-            self.conn.execute_batch(
-                "ALTER TABLE posts ADD COLUMN analysis_version INTEGER DEFAULT 1;"
-            )?;
-        }
-        if !post_cols.iter().any(|c| c == "scheduled_post_id") {
-            self.conn.execute_batch(
-                "ALTER TABLE posts ADD COLUMN scheduled_post_id TEXT;"
-            )?;
+            let post_cols: Vec<String> = self.conn
+                .prepare("PRAGMA table_info(posts)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !post_cols.iter().any(|c| c == "analysis_json") {
+                self.conn.execute_batch("ALTER TABLE posts ADD COLUMN analysis_json TEXT;")?;
+            }
+            if !post_cols.iter().any(|c| c == "analysis_version") {
+                self.conn.execute_batch("ALTER TABLE posts ADD COLUMN analysis_version INTEGER DEFAULT 1;")?;
+            }
+            if !post_cols.iter().any(|c| c == "scheduled_post_id") {
+                self.conn.execute_batch("ALTER TABLE posts ADD COLUMN scheduled_post_id TEXT;")?;
+            }
+            Ok(())
+        })();
+        match migrate_result {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => { self.conn.execute_batch("ROLLBACK;").ok(); return Err(e); }
         }
 
         // reply_outcomes view: join engagement_actions (replies) to metric snapshots

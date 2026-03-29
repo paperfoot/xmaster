@@ -260,6 +260,7 @@ const VALID_CONFIG_KEYS: &[&str] = &[
     "keys.oauth2_access_token", "keys.oauth2_refresh_token",
     "keys.web_ct0", "keys.web_auth_token", "keys.graphql_create_tweet_id",
     "settings.timeout", "settings.count",
+    "account.premium", "account.premium_tier",
     "style.voice",
 ];
 
