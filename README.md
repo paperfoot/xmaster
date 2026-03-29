@@ -39,8 +39,9 @@ xmaster post "Hello from the command line"
 Most X tools make you pick between the official API and scraping. xmaster gives you both; plus the bits nobody else builds.
 
 - **Two search backends** — X API v2 for structured queries. xAI/Grok for "find me interesting posts about longevity from today." Use whichever fits.
-- **Agent-friendly** — JSON output, semantic exit codes, machine-readable `agent-info`. Your AI agent shells out to xmaster and gets structured data back. Auto-JSON when piped.
-- **Pre-flight intelligence** — Scores your post before it goes out. Catches weak hooks, link penalties, engagement bait. Saves you from posting something that'll get buried.
+- **Agent-friendly** — JSON output, semantic exit codes, machine-readable `agent-info` with measurement coverage (measurable/proxy/blind signals) and workflow handoffs. Auto-JSON when piped.
+- **Action-centric pre-flight** — Estimates 9 proxy signals aligned with the 2026 X algorithm (reply, quote, profile_click, follow_author, share_via_dm, dwell, media_expand, negative_risk) and scores per goal (replies, quotes, shares, follows, impressions). Context-aware for replies, quotes, and media posts.
+- **Engagement intelligence** — Adaptive opportunity scoring for reply targets based on reciprocity, ROI, size fit, and topicality. Reply style classification (question, data point, counterpoint, anecdote, humor) with outcome tracking.
 - **Reply bypass** — X blocks programmatic replies to strangers. xmaster handles it automatically via web session fallback. You just run `reply` and it works.
 - **Writing style** — Save how you write. Your agent drafts in your voice, not generic AI slop.
 - **Single binary** — ~8MB Rust binary, fast startup. No Python, no Node, no Docker.
@@ -156,8 +157,11 @@ The `sync` command archives bookmark content locally in SQLite. Even if the orig
 | Command | Description | Example |
 |---------|-------------|---------|
 | `engage recommend` | Find high-ROI reply targets in your niche | `xmaster engage recommend --topic "longevity biotech" -c 10` |
+| `engage feed` | Fresh posts from big accounts to reply to now | `xmaster engage feed "AI agents" --min-followers 5000` |
+| `engage watchlist add` | Track an account without following | `xmaster engage watchlist add elonmusk --topic "tech"` |
+| `engage watchlist list` | List watched accounts | `xmaster engage watchlist list` |
 
-The algorithm weights replies at ~20x a like and DM shares at ~25x (2026 source code). `engage recommend` finds accounts most likely to reply back, ranked by reciprocity, reach, and freshness. Combine with `--topic` to discover new accounts in your niche via AI search.
+Replies are estimated ~20x a like and DM shares ~25x (2026 algorithm estimates). `engage recommend` uses an **opportunity scorer** that ranks targets by reciprocity, reply ROI, size fit (adaptive to your follower count), topicality, and freshness. `engage feed` finds fresh posts to reply to, scored by opportunity — not just recency. Reply styles are classified (question, data point, counterpoint, anecdote, humor) and tracked for outcome analysis.
 
 ### Search
 
@@ -333,9 +337,20 @@ xmaster post "Hello" | jq '.data.id'
 ### Agent Discovery
 
 ```bash
-# Machine-readable capabilities and version
-xmaster agent-info
+# Machine-readable capabilities, algorithm weights, and measurement coverage
+xmaster agent-info --json
 ```
+
+Returns: 64 commands, 18 capabilities, 15 algorithm signal weights, measurement coverage (7 measurable, 6 proxy-only, 9 blind), 5 workflow handoffs, and writing style config.
+
+### Pre-flight Analysis
+
+```bash
+# Proxy-signal estimation aligned with 2026 X algorithm
+xmaster analyze "your tweet text" --goal replies --json
+```
+
+Returns per-signal proxy scores (reply, quote, profile_click, follow_author, share_via_dm, dwell, media_expand, negative_risk) and per-goal scores (replies, quotes, shares, follows, impressions 0-100), plus lint issues and suggestions.
 
 ### Integration Example (Claude Code Skill)
 
