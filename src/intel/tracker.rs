@@ -106,6 +106,45 @@ struct FetchedMetrics {
     bookmarks: i64,
     quotes: i64,
     profile_clicks: i64,
+    url_clicks: Option<i64>,
+}
+
+/// Full tweet metrics with a canonical engagement_rate() method.
+/// Use this anywhere metrics are combined or compared.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TweetMetricsFull {
+    pub likes: i64,
+    pub retweets: i64,
+    pub replies: i64,
+    pub quotes: i64,
+    pub impressions: i64,
+    pub bookmarks: i64,
+    pub profile_clicks: Option<i64>,
+    pub url_clicks: Option<i64>,
+}
+
+impl TweetMetricsFull {
+    /// Canonical engagement rate: (likes + retweets + replies + quotes) / impressions.
+    /// Bookmarks excluded — not a 2026 algorithm signal.
+    pub fn engagement_rate(&self) -> f64 {
+        if self.impressions <= 0 { return 0.0; }
+        (self.likes + self.retweets + self.replies + self.quotes) as f64 / self.impressions as f64
+    }
+}
+
+impl FetchedMetrics {
+    fn to_full(&self) -> TweetMetricsFull {
+        TweetMetricsFull {
+            likes: self.likes,
+            retweets: self.retweets,
+            replies: self.replies,
+            quotes: self.quotes,
+            impressions: self.impressions,
+            bookmarks: self.bookmarks,
+            profile_clicks: if self.profile_clicks > 0 { Some(self.profile_clicks) } else { None },
+            url_clicks: self.url_clicks,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +228,29 @@ impl PostTracker {
             );",
         )
         .map_err(|e| XmasterError::Config(format!("DB init error: {e}")))?;
+
+        // Safe migrations: add local-time columns if not present
+        let post_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(posts)")
+            .and_then(|mut s| s.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>())
+            .unwrap_or_default();
+        if !post_cols.iter().any(|c| c == "local_day_of_week") {
+            conn.execute_batch("ALTER TABLE posts ADD COLUMN local_day_of_week INTEGER;").ok();
+        }
+        if !post_cols.iter().any(|c| c == "local_hour_of_day") {
+            conn.execute_batch("ALTER TABLE posts ADD COLUMN local_hour_of_day INTEGER;").ok();
+        }
+        if !post_cols.iter().any(|c| c == "tz_offset_minutes") {
+            conn.execute_batch("ALTER TABLE posts ADD COLUMN tz_offset_minutes INTEGER;").ok();
+        }
+        // Add url_clicks to metric_snapshots if not present
+        let ms_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(metric_snapshots)")
+            .and_then(|mut s| s.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>())
+            .unwrap_or_default();
+        if !ms_cols.iter().any(|c| c == "url_clicks") {
+            conn.execute_batch("ALTER TABLE metric_snapshots ADD COLUMN url_clicks INTEGER;").ok();
+        }
 
         Ok(Self { conn })
     }
@@ -296,7 +358,7 @@ impl PostTracker {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT p.day_of_week, p.hour_of_day,
+                "SELECT COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day),
                         AVG(ms.impressions) AS avg_imp,
                         AVG(CASE WHEN ms.impressions > 0
                              THEN (ms.likes + ms.retweets + ms.replies + ms.quotes) * 1.0
@@ -304,7 +366,7 @@ impl PostTracker {
                         COUNT(DISTINCT p.tweet_id) AS cnt
                  FROM posts p
                  JOIN metric_snapshots ms ON ms.tweet_id = p.tweet_id
-                 GROUP BY p.day_of_week, p.hour_of_day
+                 GROUP BY COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day)
                  ORDER BY avg_er DESC",
             )
             .map_err(|e| XmasterError::Config(format!("DB error: {e}")))?;
@@ -347,7 +409,7 @@ impl PostTracker {
             Some(ct) => self
                 .conn
                 .query_row(
-                    "SELECT p.day_of_week, p.hour_of_day,
+                    "SELECT COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day),
                             AVG(ms.impressions),
                             AVG(CASE WHEN ms.impressions > 0
                                  THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
@@ -356,7 +418,7 @@ impl PostTracker {
                      FROM posts p
                      JOIN metric_snapshots ms ON ms.tweet_id = p.tweet_id
                      WHERE p.content_type = ?1
-                     GROUP BY p.day_of_week, p.hour_of_day
+                     GROUP BY COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day)
                      HAVING COUNT(DISTINCT p.tweet_id) >= 2
                      ORDER BY 4 DESC LIMIT 1",
                     params![ct],
@@ -378,7 +440,7 @@ impl PostTracker {
             None => self
                 .conn
                 .query_row(
-                    "SELECT p.day_of_week, p.hour_of_day,
+                    "SELECT COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day),
                             AVG(ms.impressions),
                             AVG(CASE WHEN ms.impressions > 0
                                  THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
@@ -386,7 +448,7 @@ impl PostTracker {
                             COUNT(DISTINCT p.tweet_id)
                      FROM posts p
                      JOIN metric_snapshots ms ON ms.tweet_id = p.tweet_id
-                     GROUP BY p.day_of_week, p.hour_of_day
+                     GROUP BY COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day)
                      HAVING COUNT(DISTINCT p.tweet_id) >= 2
                      ORDER BY 4 DESC LIMIT 1",
                     [],
@@ -701,7 +763,7 @@ impl PostTracker {
                 "INSERT INTO timing_stats
                     (day_of_week, hour_of_day, content_type,
                      avg_impressions, avg_engagement_rate, sample_count, last_updated)
-                 SELECT p.day_of_week, p.hour_of_day, 'all',
+                 SELECT COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day), 'all',
                         AVG(ms.impressions),
                         AVG(CASE WHEN ms.impressions > 0
                              THEN (ms.likes+ms.retweets+ms.replies+ms.quotes)*1.0
@@ -710,7 +772,7 @@ impl PostTracker {
                         ?1
                  FROM posts p
                  JOIN metric_snapshots ms ON ms.tweet_id = p.tweet_id
-                 GROUP BY p.day_of_week, p.hour_of_day",
+                 GROUP BY COALESCE(p.local_day_of_week, p.day_of_week), COALESCE(p.local_hour_of_day, p.hour_of_day)",
                 params![now],
             )
             .map_err(|e| XmasterError::Config(format!("DB error: {e}")))?;
@@ -758,6 +820,8 @@ struct MetricsPublic {
 struct MetricsNonPublic {
     #[serde(default)]
     user_profile_clicks: i64,
+    #[serde(default)]
+    url_link_clicks: i64,
 }
 
 fn oauth_secrets(ctx: &crate::context::AppContext) -> reqwest_oauth1::Secrets<'_> {
@@ -815,6 +879,7 @@ async fn fetch_tweet_metrics(
         bookmarks: pub_m.bookmark_count,
         quotes: pub_m.quote_count,
         profile_clicks: non_pub.user_profile_clicks,
+        url_clicks: if non_pub.url_link_clicks > 0 { Some(non_pub.url_link_clicks) } else { None },
     })
 }
 

@@ -196,7 +196,13 @@ impl IntelStore {
                 hour_of_day     INTEGER NOT NULL,
                 reply_to_id     TEXT,
                 quote_of_id     TEXT,
-                preflight_score REAL
+                preflight_score REAL,
+                analysis_json   TEXT,
+                analysis_version INTEGER DEFAULT 1,
+                scheduled_post_id TEXT,
+                local_day_of_week INTEGER,
+                local_hour_of_day INTEGER,
+                tz_offset_minutes INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS metric_snapshots (
@@ -427,10 +433,14 @@ impl IntelStore {
         scheduled_post_id: Option<&str>,
     ) -> Result<(), rusqlite::Error> {
         let now = Utc::now();
+        let local_now = chrono::Local::now();
         let posted_at = now.timestamp();
-        let day_of_week = now.weekday().num_days_from_monday() as i32; // 0=Mon
-        let hour_of_day = now.hour() as i32;
-        let char_count = text.len() as i32;
+        let day_of_week = now.weekday().num_days_from_monday() as i32; // 0=Mon (UTC)
+        let hour_of_day = now.hour() as i32; // UTC
+        let local_day = local_now.weekday().num_days_from_monday() as i32;
+        let local_hour = local_now.hour() as i32;
+        let tz_offset = local_now.offset().local_minus_utc() / 60;
+        let char_count = text.chars().count() as i32;
         let has_link = text.contains("http://") || text.contains("https://");
         let hashtag_count = text.matches('#').count() as i32;
         let hook_text: String = text.chars().take(140).collect();
@@ -440,8 +450,9 @@ impl IntelStore {
                 (tweet_id, text, content_type, char_count, has_link, has_media, has_poll,
                  hashtag_count, hook_text, posted_at, day_of_week, hour_of_day,
                  reply_to_id, quote_of_id, preflight_score,
-                 analysis_json, analysis_version, scheduled_post_id)
-             VALUES (?1,?2,?3,?4,?5,0,0,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,?15)",
+                 analysis_json, analysis_version, scheduled_post_id,
+                 local_day_of_week, local_hour_of_day, tz_offset_minutes)
+             VALUES (?1,?2,?3,?4,?5,0,0,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,?15,?16,?17,?18)",
             params![
                 tweet_id,
                 text,
@@ -458,6 +469,9 @@ impl IntelStore {
                 preflight_score,
                 analysis_json,
                 scheduled_post_id,
+                local_day,
+                local_hour,
+                tz_offset,
             ],
         )?;
         Ok(())
