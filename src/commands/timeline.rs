@@ -1,5 +1,6 @@
 use crate::context::AppContext;
 use crate::errors::XmasterError;
+use crate::intel::store::IntelStore;
 use crate::output::{self, CsvRenderable, OutputFormat, Tableable};
 use crate::providers::xapi::XApi;
 use serde::Serialize;
@@ -134,6 +135,9 @@ pub async fn timeline(
         }
         None => api.get_home_timeline(count).await?,
     };
+    if let Ok(store) = IntelStore::open() {
+        let _ = store.record_discovered_posts("timeline", &tweets);
+    }
     let mut list = tweets_to_list(tweets);
 
     // Client-side sort
@@ -160,6 +164,9 @@ pub async fn mentions(
     let api = XApi::new(ctx.clone());
     let user_id = api.get_authenticated_user_id().await?;
     let tweets = api.get_user_mentions_since(&user_id, count, since_id).await?;
+    if let Ok(store) = IntelStore::open() {
+        let _ = store.record_discovered_posts("mentions", &tweets);
+    }
     output::render_csv(format, &tweets_to_list(tweets), None);
     Ok(())
 }

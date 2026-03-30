@@ -10,6 +10,17 @@ use crate::config::config_dir;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredPostRow {
+    pub tweet_id: String,
+    pub author_username: String,
+    pub text: String,
+    pub like_count: i64,
+    pub impression_count: i64,
+    pub last_source: String,
+    pub first_discovered_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct WatchlistEntry {
     pub username: String,
     pub user_id: Option<String>,
@@ -251,6 +262,35 @@ impl IntelStore {
                 sample_count        INTEGER NOT NULL DEFAULT 0,
                 last_updated        INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS discovered_posts (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                tweet_id               TEXT UNIQUE NOT NULL,
+                text                   TEXT NOT NULL,
+                author_id              TEXT,
+                author_username        TEXT,
+                created_at             TEXT,
+                conversation_id        TEXT,
+                referenced_tweets_json TEXT NOT NULL DEFAULT '[]',
+                like_count             INTEGER,
+                retweet_count          INTEGER,
+                reply_count            INTEGER,
+                impression_count       INTEGER,
+                bookmark_count         INTEGER,
+                author_followers       INTEGER,
+                media_urls_json        TEXT NOT NULL DEFAULT '[]',
+                first_source           TEXT NOT NULL,
+                last_source            TEXT NOT NULL,
+                first_discovered_at    INTEGER NOT NULL,
+                last_seen_at           INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_discovered_author
+                ON discovered_posts(author_username);
+            CREATE INDEX IF NOT EXISTS idx_discovered_last_seen
+                ON discovered_posts(last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_discovered_impressions
+                ON discovered_posts(impression_count DESC);
             ",
         )?;
 
@@ -503,6 +543,150 @@ impl IntelStore {
             scheduled_post_id,
         )
     }
+
+    // -- discovered posts library ---------------------------------------------
+
+    /// Cache external posts encountered during search/timeline/read commands.
+    /// UPSERT: first encounter preserves source/timestamp, re-encounters update metrics.
+    pub fn record_discovered_posts(
+        &self,
+        source: &str,
+        tweets: &[crate::providers::xapi::TweetData],
+    ) -> Result<(), rusqlite::Error> {
+        if tweets.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp();
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO discovered_posts (
+                    tweet_id, text, author_id, author_username, created_at,
+                    conversation_id, referenced_tweets_json,
+                    like_count, retweet_count, reply_count, impression_count,
+                    bookmark_count, author_followers, media_urls_json,
+                    first_source, last_source, first_discovered_at, last_seen_at
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?16)
+                ON CONFLICT(tweet_id) DO UPDATE SET
+                    text = excluded.text,
+                    author_id = COALESCE(excluded.author_id, discovered_posts.author_id),
+                    author_username = COALESCE(excluded.author_username, discovered_posts.author_username),
+                    created_at = COALESCE(excluded.created_at, discovered_posts.created_at),
+                    conversation_id = COALESCE(excluded.conversation_id, discovered_posts.conversation_id),
+                    referenced_tweets_json = CASE
+                        WHEN excluded.referenced_tweets_json <> '[]' THEN excluded.referenced_tweets_json
+                        ELSE discovered_posts.referenced_tweets_json END,
+                    like_count = COALESCE(excluded.like_count, discovered_posts.like_count),
+                    retweet_count = COALESCE(excluded.retweet_count, discovered_posts.retweet_count),
+                    reply_count = COALESCE(excluded.reply_count, discovered_posts.reply_count),
+                    impression_count = COALESCE(excluded.impression_count, discovered_posts.impression_count),
+                    bookmark_count = COALESCE(excluded.bookmark_count, discovered_posts.bookmark_count),
+                    author_followers = COALESCE(excluded.author_followers, discovered_posts.author_followers),
+                    media_urls_json = CASE
+                        WHEN excluded.media_urls_json <> '[]' THEN excluded.media_urls_json
+                        ELSE discovered_posts.media_urls_json END,
+                    last_source = excluded.last_source,
+                    last_seen_at = excluded.last_seen_at",
+            )?;
+            for t in tweets {
+                let m = t.public_metrics.as_ref();
+                let refs_json = serde_json::to_string(
+                    &t.referenced_tweets.as_deref().unwrap_or(&[])
+                ).unwrap_or_else(|_| "[]".into());
+                let media_json = serde_json::to_string(&t.media_urls)
+                    .unwrap_or_else(|_| "[]".into());
+                stmt.execute(params![
+                    t.id,
+                    t.text,
+                    t.author_id,
+                    t.author_username,
+                    t.created_at,
+                    t.conversation_id,
+                    refs_json,
+                    m.map(|m| m.like_count as i64),
+                    m.map(|m| m.retweet_count as i64),
+                    m.map(|m| m.reply_count as i64),
+                    m.map(|m| m.impression_count as i64),
+                    m.map(|m| m.bookmark_count as i64),
+                    t.author_followers.map(|f| f as i64),
+                    media_json,
+                    source,
+                    now,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Cache a single discovered post.
+    pub fn record_discovered_post(
+        &self,
+        source: &str,
+        tweet: &crate::providers::xapi::TweetData,
+    ) -> Result<(), rusqlite::Error> {
+        self.record_discovered_posts(source, std::slice::from_ref(tweet))
+    }
+
+    /// Query the discovered posts library with optional filters.
+    pub fn query_discovered_posts(
+        &self,
+        topic: Option<&str>,
+        author: Option<&str>,
+        min_likes: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<DiscoveredPostRow>, rusqlite::Error> {
+        let mut sql = String::from(
+            "SELECT tweet_id, COALESCE(author_username,''), text,
+                    COALESCE(like_count,0), COALESCE(impression_count,0),
+                    last_source, first_discovered_at
+             FROM discovered_posts WHERE 1=1"
+        );
+        // Build dynamic WHERE clauses — params are positional
+        let mut param_idx = 1usize;
+        let topic_idx = if topic.is_some() {
+            sql.push_str(&format!(" AND text LIKE '%' || ?{param_idx} || '%'"));
+            let idx = param_idx; param_idx += 1; Some(idx)
+        } else { None };
+        let author_idx = if author.is_some() {
+            sql.push_str(&format!(" AND author_username LIKE '%' || ?{param_idx} || '%'"));
+            let idx = param_idx; param_idx += 1; Some(idx)
+        } else { None };
+        let likes_idx = if min_likes.is_some() {
+            sql.push_str(&format!(" AND like_count >= ?{param_idx}"));
+            let idx = param_idx; param_idx += 1; Some(idx)
+        } else { None };
+        sql.push_str(&format!(" ORDER BY COALESCE(impression_count,0) DESC LIMIT ?{param_idx}"));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut bind_idx = 1usize;
+        if let Some(_) = topic_idx { stmt.raw_bind_parameter(bind_idx, topic.unwrap())?; bind_idx += 1; }
+        if let Some(_) = author_idx { stmt.raw_bind_parameter(bind_idx, author.unwrap())?; bind_idx += 1; }
+        if let Some(_) = likes_idx { stmt.raw_bind_parameter(bind_idx, min_likes.unwrap())?; bind_idx += 1; }
+        stmt.raw_bind_parameter(bind_idx, limit as i64)?;
+
+        let mut rows = Vec::new();
+        let mut raw = stmt.raw_query();
+        while let Some(row) = raw.next()? {
+            rows.push(DiscoveredPostRow {
+                tweet_id: row.get(0)?,
+                author_username: row.get(1)?,
+                text: row.get(2)?,
+                like_count: row.get(3)?,
+                impression_count: row.get(4)?,
+                last_source: row.get(5)?,
+                first_discovered_at: row.get(6)?,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// Count total posts in the discovered library.
+    pub fn discovered_posts_count(&self) -> Result<i64, rusqlite::Error> {
+        self.conn.query_row("SELECT COUNT(*) FROM discovered_posts", [], |r| r.get(0))
+    }
+
+    // -- metric snapshots -----------------------------------------------------
 
     /// Record a metric snapshot for a tweet.
     #[allow(clippy::too_many_arguments)]
@@ -1056,5 +1240,58 @@ mod tests {
         let pending = store.get_pending_replies(24).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].reply_tweet_id, "reply_001");
+    }
+
+    #[test]
+    fn discovered_posts_upsert_and_query() {
+        let store = test_store();
+        let tweet = crate::providers::xapi::TweetData {
+            id: "dp_123".into(),
+            text: "Longevity research is the future".into(),
+            author_id: Some("user1".into()),
+            author_username: Some("testuser".into()),
+            created_at: Some("2026-01-01T00:00:00Z".into()),
+            conversation_id: None,
+            referenced_tweets: None,
+            public_metrics: Some(crate::providers::xapi::TweetMetrics {
+                like_count: 42,
+                retweet_count: 5,
+                reply_count: 3,
+                impression_count: 2000,
+                bookmark_count: 1,
+            }),
+            author_followers: Some(500),
+            media_urls: vec![],
+        };
+        // First insert
+        store.record_discovered_post("search", &tweet).unwrap();
+        assert_eq!(store.discovered_posts_count().unwrap(), 1);
+
+        // Upsert: same tweet, different source — updates last_source, preserves first_source
+        store.record_discovered_post("timeline", &tweet).unwrap();
+        assert_eq!(store.discovered_posts_count().unwrap(), 1);
+        let last: String = store.conn.query_row(
+            "SELECT last_source FROM discovered_posts WHERE tweet_id = 'dp_123'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(last, "timeline");
+        let first: String = store.conn.query_row(
+            "SELECT first_source FROM discovered_posts WHERE tweet_id = 'dp_123'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(first, "search");
+
+        // Query: by topic
+        let results = store.query_discovered_posts(Some("longevity"), None, None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tweet_id, "dp_123");
+
+        // Query: by min_likes
+        let results = store.query_discovered_posts(None, None, Some(100), 10).unwrap();
+        assert_eq!(results.len(), 0); // 42 < 100
+        let results = store.query_discovered_posts(None, None, Some(10), 10).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Query: by author
+        let results = store.query_discovered_posts(None, Some("testuser"), None, 10).unwrap();
+        assert_eq!(results.len(), 1);
     }
 }

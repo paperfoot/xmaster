@@ -1,6 +1,7 @@
 use crate::cli::parse_tweet_id;
 use crate::context::AppContext;
 use crate::errors::XmasterError;
+use crate::intel::store::IntelStore;
 use crate::output::{self, OutputFormat, Tableable};
 use crate::providers::xapi::XApi;
 use serde::Serialize;
@@ -52,6 +53,9 @@ pub async fn execute(
     let api = XApi::new(ctx.clone());
     let tweet_id = parse_tweet_id(id);
     let tweet = api.get_tweet(&tweet_id).await?;
+    if let Ok(store) = IntelStore::open() {
+        let _ = store.record_discovered_post("read", &tweet);
+    }
 
     let metrics = tweet.public_metrics.as_ref();
     let display = PostDisplay {

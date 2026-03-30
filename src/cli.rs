@@ -308,6 +308,22 @@ pub enum Commands {
         goal: Option<String>,
     },
 
+    /// Browse your discovered posts library for content inspiration
+    Inspire {
+        /// Filter by topic (searches post text)
+        #[arg(long)]
+        topic: Option<String>,
+        /// Filter by author username
+        #[arg(long)]
+        author: Option<String>,
+        /// Minimum like count
+        #[arg(long)]
+        min_likes: Option<i64>,
+        /// Number of results
+        #[arg(long, default_value = "20")]
+        count: usize,
+    },
+
     /// Track metric snapshots for recent posts
     Track {
         #[command(subcommand)]

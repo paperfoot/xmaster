@@ -1,5 +1,6 @@
 use crate::context::AppContext;
 use crate::errors::XmasterError;
+use crate::intel::store::IntelStore;
 use crate::output::{self, CsvRenderable, OutputFormat, Tableable};
 use crate::providers::xapi::XApi;
 use serde::Serialize;
@@ -87,6 +88,9 @@ pub async fn execute(
         .map_err(|e| XmasterError::Config(e))?;
     let api = XApi::new(ctx.clone());
     let tweets = api.search_tweets_paginated(query, mode, count, start_time.as_deref(), end_time.as_deref()).await?;
+    if let Ok(store) = IntelStore::open() {
+        let _ = store.record_discovered_posts("search", &tweets);
+    }
     let display = SearchResults {
         query: query.to_string(),
         tweets: tweets.into_iter().map(|t| {

@@ -126,6 +126,9 @@ pub async fn recommend(
     let xapi = crate::providers::xapi::XApi::new(ctx.clone());
     if let Ok(user_id) = xapi.get_authenticated_user_id().await {
         if let Ok(mentions) = xapi.get_user_mentions(&user_id, 20).await {
+            if let Ok(store) = IntelStore::open() {
+                let _ = store.record_discovered_posts("recommend_mentions", &mentions);
+            }
             for tweet in &mentions {
                 if let Some(username) = &tweet.author_username {
                     let key = username.to_lowercase();
@@ -459,6 +462,10 @@ pub async fn feed(
         if seen_ids.insert(t.id.clone()) {
             tweets.push(t);
         }
+    }
+
+    if let Ok(store) = IntelStore::open() {
+        let _ = store.record_discovered_posts("engage_feed", &tweets);
     }
 
     let now = chrono::Utc::now();

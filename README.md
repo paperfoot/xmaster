@@ -209,6 +209,17 @@ Posts are stored locally in SQLite — no X Ads API needed, pure local schedulin
 | `track followers` | Track follower changes (new/lost) | `xmaster track followers` |
 | `track growth` | Follower growth history | `xmaster track growth -d 30` |
 | `engage recommend` | Find high-ROI reply targets | `xmaster engage recommend --topic "AI" -c 10` |
+| `inspire` | Browse discovered posts library | `xmaster inspire --topic "longevity" --min-likes 50` |
+
+### Discovered Posts Library
+
+Every search, timeline view, and post read automatically caches posts into a local SQLite library — zero extra API calls. Over time, this builds a personal collection of posts from your niche.
+
+```bash
+xmaster inspire --topic "longevity" --min-likes 100  # Browse by topic
+xmaster inspire --author "naval" --count 10           # Browse by author
+xmaster inspire --json                                # Pipe to jq for analysis
+```
 
 ### Lists
 

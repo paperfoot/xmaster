@@ -24,6 +24,7 @@ pub mod engage_recommend;
 pub mod skill_cmd;
 pub mod replies;
 pub mod read_post;
+pub mod inspire;
 
 use crate::cli::{Cli, Commands, ConfigCommands, DmCommands, EngageCommands, WatchlistCommands, ListCommands, TrackCommands, ReportCommands, SuggestCommands, ScheduleCommands, BookmarkCommands, SkillCommands};
 use crate::context::AppContext;
@@ -137,6 +138,8 @@ pub async fn dispatch(
         Commands::Mute { username } => moderation::mute(ctx, format, username).await,
         Commands::Unmute { username } => moderation::unmute(ctx, format, username).await,
         Commands::Analyze { text, goal } => analyze::execute(ctx, format, text, goal.as_deref()).await,
+        Commands::Inspire { topic, author, min_likes, count } =>
+            inspire::execute(ctx, format, topic.as_deref(), author.as_deref(), *min_likes, *count).await,
         Commands::Track { action } => match action {
             TrackCommands::Run => track::track_run(ctx, format).await,
             TrackCommands::Status => track::track_status(ctx, format).await,
