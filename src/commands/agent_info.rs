@@ -234,12 +234,43 @@ pub fn execute(format: OutputFormat) {
             "Use 'xmaster config get style.voice' to read the current voice before updating it — adapt, don't replace".into(),
             "Every search/timeline/read automatically builds your local post library — use 'xmaster inspire --topic X' to browse it".into(),
             "Set account.premium to true if you have X Premium — unlocks 25k char limit instead of 280".into(),
+            // ── metrics & tracking — agent-friendly batch patterns ──
+            "BATCH METRICS: 'xmaster metrics ID1 ID2 ID3 ...' fetches multiple tweets in ONE HTTP call (up to 100 IDs). NEVER loop per-id — it wastes tool calls and rate limits".into(),
+            "Every metrics call returns pre-computed age_seconds, age_human ('9 min'), delta vs previous snapshot (+imps since last check), and velocity (imps/min). Top-level 'now' field gives server time. The agent should NOT do clock arithmetic — the CLI already did it".into(),
+            "Each metrics call auto-saves a snapshot to the local DB. The NEXT call gets a delta for free — so running metrics twice with a gap is the cheapest way to see a trend".into(),
+            "Use 'xmaster track run' to batch-snapshot all your recent posts and check for reply-backs on pending replies — one command replaces N metrics calls when auditing recent activity".into(),
+            // ── engagement: watchlist auto-tracking ──
+            "Use 'xmaster engage watchlist add <username> --topic \"your niche\"' to pin important accounts without following. 'xmaster engage watchlist list' shows them. Watchlist accounts are prioritised by 'engage feed'".into(),
+            "'xmaster engage feed \"your niche\"' checks watchlist accounts first (saves API calls) and silently auto-adds high-follower discovered authors (>=10k) back into the watchlist — so the watchlist grows itself as you discover targets".into(),
+            "After replying to targets, run 'xmaster track run' to capture reply-backs (when the target replies to you). The reply-back signal is tracked in engagement_actions and surfaces in 'engage recommend'".into(),
         ],
         handoffs: vec![
             Handoff {
                 after_command: "post".into(),
-                next_commands: vec!["xmaster metrics <id>".into(), "xmaster track run".into()],
-                reason: "Track engagement on your new post to learn what works".into(),
+                // track run FIRST — batch-snapshots all your recent posts + checks reply-backs.
+                // metrics <id> is the fallback for spot-checking one specific tweet.
+                next_commands: vec![
+                    "xmaster track run".into(),
+                    "xmaster metrics <id>".into(),
+                ],
+                reason: "Batch-snapshot recent posts and catch reply-backs in one command. Use metrics <id> only for a deep dive on one specific tweet".into(),
+            },
+            Handoff {
+                after_command: "reply".into(),
+                next_commands: vec![
+                    "xmaster track run".into(),
+                    "xmaster metrics <reply_id>".into(),
+                ],
+                reason: "track run snapshots the new reply AND polls the target for a reply-back. metrics <reply_id> gives delta+velocity on this specific reply".into(),
+            },
+            Handoff {
+                after_command: "metrics".into(),
+                // Hint agents to batch next time: if they want to check more posts, use one call.
+                next_commands: vec![
+                    "xmaster metrics ID1 ID2 ID3 ...".into(),
+                    "xmaster track run".into(),
+                ],
+                reason: "metrics accepts multiple IDs in one call — never loop per-id. For auditing recent activity, track run is faster still".into(),
             },
             Handoff {
                 after_command: "analyze".into(),
@@ -253,13 +284,21 @@ pub fn execute(format: OutputFormat) {
             },
             Handoff {
                 after_command: "engage recommend".into(),
-                next_commands: vec!["xmaster reply <id> \"...\"".into(), "xmaster like <id>".into()],
-                reason: "Act on the recommended engagement targets".into(),
+                next_commands: vec![
+                    "xmaster reply <id> \"...\"".into(),
+                    "xmaster like <id>".into(),
+                    "xmaster engage watchlist add <username>".into(),
+                ],
+                reason: "Act on the recommended engagement targets — add proven reciprocators to your watchlist".into(),
             },
             Handoff {
                 after_command: "engage feed".into(),
-                next_commands: vec!["xmaster reply <id> \"...\"".into(), "xmaster like <id>".into()],
-                reason: "Engage with the curated feed items to build reciprocity".into(),
+                next_commands: vec![
+                    "xmaster reply <id> \"...\"".into(),
+                    "xmaster like <id>".into(),
+                    "xmaster engage watchlist list".into(),
+                ],
+                reason: "Engage with the curated feed, then check which accounts feed silently auto-added to your watchlist".into(),
             },
         ],
         writing_style: style,
