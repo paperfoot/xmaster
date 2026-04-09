@@ -359,6 +359,10 @@ pub async fn watchlist_remove(format: OutputFormat, username: &str) -> Result<()
 pub struct FeedPost {
     pub id: String,
     pub author: String,
+    #[serde(skip_serializing)]
+    pub watchlist_username: Option<String>,
+    #[serde(skip_serializing)]
+    pub author_user_id: Option<String>,
     pub author_followers: u64,
     pub text: String,
     pub age_minutes: i64,
@@ -414,7 +418,29 @@ pub async fn feed(
     if let Ok(store) = IntelStore::open() {
         if let Ok(watchlist) = store.list_watchlist() {
             for entry in &watchlist {
-                if let Some(ref uid) = entry.user_id {
+                let resolved_uid = if let Some(uid) = entry.user_id.clone() {
+                    Some(uid)
+                } else {
+                    match api.get_user_by_username(&entry.username).await {
+                        Ok(user) => {
+                            let followers = user
+                                .public_metrics
+                                .as_ref()
+                                .map(|m| m.followers_count as i64)
+                                .unwrap_or(entry.followers);
+                            let _ = store.add_watchlist(
+                                &entry.username,
+                                Some(&user.id),
+                                entry.topic.as_deref(),
+                                followers,
+                            );
+                            Some(user.id)
+                        }
+                        Err(_) => None,
+                    }
+                };
+
+                if let Some(uid) = resolved_uid.as_deref() {
                     let start_time = {
                         let since = chrono::Utc::now() - chrono::Duration::minutes(max_age_mins as i64);
                         since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -493,13 +519,18 @@ pub async fn feed(
             .unwrap_or(0);
 
         let metrics = t.public_metrics.as_ref();
-        let author = t.author_username
-            .unwrap_or_else(|| t.author_id.unwrap_or_default());
+        let author_user_id = t.author_id.clone();
+        let watchlist_username = t.author_username.clone();
+        let author = watchlist_username
+            .clone()
+            .unwrap_or_else(|| author_user_id.clone().unwrap_or_default());
 
         posts.push(FeedPost {
             reply_command: format!("xmaster reply {} \"your reply\"", t.id),
             id: t.id,
             author: author.clone(),
+            watchlist_username,
+            author_user_id,
             author_followers,
             text: t.text,
             age_minutes,
@@ -527,7 +558,14 @@ pub async fn feed(
     if let Ok(store) = IntelStore::open() {
         for p in &posts {
             if p.author_followers >= 10_000 {
-                let _ = store.add_watchlist(&p.author, None, Some(topic), p.author_followers as i64);
+                if let Some(username) = p.watchlist_username.as_deref() {
+                    let _ = store.add_watchlist(
+                        username,
+                        p.author_user_id.as_deref(),
+                        Some(topic),
+                        p.author_followers as i64,
+                    );
+                }
             }
         }
     }
@@ -567,4 +605,3 @@ fn extract_usernames_from_text(text: &str) -> Vec<String> {
 
     usernames
 }
-
