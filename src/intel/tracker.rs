@@ -97,20 +97,9 @@ pub struct NextPostSuggestion {
 // Metric snapshot data fetched from X API (used internally)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Default)]
-struct FetchedMetrics {
-    likes: i64,
-    retweets: i64,
-    replies: i64,
-    impressions: i64,
-    bookmarks: i64,
-    quotes: i64,
-    profile_clicks: i64,
-    url_clicks: Option<i64>,
-}
-
 /// Full tweet metrics with a canonical engagement_rate() method.
-/// Use this anywhere metrics are combined or compared.
+/// Kept public because downstream callers may build one of these up from
+/// arbitrary sources to compare / combine metrics consistently.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TweetMetricsFull {
     pub likes: i64,
@@ -129,21 +118,6 @@ impl TweetMetricsFull {
     pub fn engagement_rate(&self) -> f64 {
         if self.impressions <= 0 { return 0.0; }
         (self.likes + self.retweets + self.replies + self.quotes) as f64 / self.impressions as f64
-    }
-}
-
-impl FetchedMetrics {
-    fn to_full(&self) -> TweetMetricsFull {
-        TweetMetricsFull {
-            likes: self.likes,
-            retweets: self.retweets,
-            replies: self.replies,
-            quotes: self.quotes,
-            impressions: self.impressions,
-            bookmarks: self.bookmarks,
-            profile_clicks: if self.profile_clicks > 0 { Some(self.profile_clicks) } else { None },
-            url_clicks: self.url_clicks,
-        }
     }
 }
 
@@ -200,7 +174,8 @@ impl PostTracker {
                 impressions INTEGER NOT NULL DEFAULT 0,
                 bookmarks INTEGER NOT NULL DEFAULT 0,
                 quotes INTEGER NOT NULL DEFAULT 0,
-                profile_clicks INTEGER NOT NULL DEFAULT 0
+                profile_clicks INTEGER NOT NULL DEFAULT 0,
+                url_clicks INTEGER
             );
             CREATE TABLE IF NOT EXISTS account_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,47 +230,19 @@ impl PostTracker {
         Ok(Self { conn })
     }
 
-    // -- snapshot a single tweet via X API ------------------------------------
-
-    /// Fetch current metrics for a single tweet and record a snapshot.
-    /// Uses `reqwest_oauth1` directly, mirroring the pattern in commands/metrics.rs.
-    pub async fn snapshot_tweet(
-        &self,
-        ctx: &crate::context::AppContext,
-        tweet_id: &str,
-        minutes_since_post: i64,
-    ) -> Result<(), XmasterError> {
-        let metrics = fetch_tweet_metrics(ctx, tweet_id).await?;
-
-        let snapshot_at = Utc::now().timestamp();
-        self.conn
-            .execute(
-                "INSERT INTO metric_snapshots
-                    (tweet_id, snapshot_at, minutes_since_post, likes, retweets, replies,
-                     impressions, bookmarks, quotes, profile_clicks)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                params![
-                    tweet_id,
-                    snapshot_at,
-                    minutes_since_post,
-                    metrics.likes,
-                    metrics.retweets,
-                    metrics.replies,
-                    metrics.impressions,
-                    metrics.bookmarks,
-                    metrics.quotes,
-                    metrics.profile_clicks,
-                ],
-            )
-            .map_err(|e| XmasterError::Config(format!("DB error: {e}")))?;
-        Ok(())
-    }
-
     // -- snapshot all recent posts --------------------------------------------
 
+    /// Fetch current metrics for every post within the last `hours` window in
+    /// a single batched HTTP pass via `XApi::get_posts_by_ids`, then insert a
+    /// snapshot row for each matched tweet.
+    ///
+    /// Previously this looped `snapshot_tweet` per post = O(n) HTTP calls. The
+    /// batch path uses one call per 100 tweets. Results are joined back to
+    /// posts by tweet_id (HashMap lookup) — never by index — because X may
+    /// omit deleted tweets or reorder the response.
     pub async fn snapshot_all_recent(
         &self,
-        ctx: &crate::context::AppContext,
+        ctx: &std::sync::Arc<crate::context::AppContext>,
         hours: u32,
     ) -> Result<SnapshotSummary, XmasterError> {
         let now = Utc::now();
@@ -327,17 +274,84 @@ impl PostTracker {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| XmasterError::Config(format!("DB error: {e}")))?;
 
+        if rows.is_empty() {
+            self.update_timing_stats()?;
+            return Ok(SnapshotSummary {
+                tweets_snapshotted: 0,
+                errors: 0,
+            });
+        }
+
+        let tweet_ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+
+        // Single batched fetch via the shared XApi helper. XApi chunks into
+        // groups of 100 internally and handles the 403 public-only fallback.
+        let api = crate::providers::xapi::XApi::new(ctx.clone());
+        let lookups = match api.get_posts_by_ids(&tweet_ids).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "batch metrics fetch failed in snapshot_all_recent");
+                return Ok(SnapshotSummary {
+                    tweets_snapshotted: 0,
+                    errors: rows.len() as u32,
+                });
+            }
+        };
+
+        // Index by tweet_id. NEVER zip by position — X may omit deleted tweets
+        // or return them in an arbitrary order, and a positional mismatch would
+        // write the wrong metrics to the wrong post.
+        let by_id: std::collections::HashMap<String, crate::providers::xapi::TweetLookup> =
+            lookups.into_iter().map(|t| (t.id.clone(), t)).collect();
+
         let mut snapshotted = 0u32;
         let mut errors = 0u32;
+        let snapshot_at = now_ts;
 
         for (tweet_id, posted_at) in &rows {
+            let Some(lookup) = by_id.get(tweet_id) else {
+                tracing::warn!(
+                    tweet_id = %tweet_id,
+                    "tweet not returned by /2/tweets batch — likely deleted or hidden"
+                );
+                errors += 1;
+                continue;
+            };
+
+            let public = lookup.public_metrics.clone().unwrap_or_default();
+            // Store Some(0) when non_public_metrics was present (real zero),
+            // None only when absent (403 fallback). Distinguishing "no data"
+            // from "0 clicks" is the whole point of making this Optional.
+            let url_clicks = lookup
+                .non_public_metrics
+                .as_ref()
+                .map(|np| np.url_link_clicks as i64);
+            let non_public = lookup.non_public_metrics.clone().unwrap_or_default();
             let posted = DateTime::from_timestamp(*posted_at, 0).unwrap_or(now);
             let minutes = (now - posted).num_minutes();
 
-            match self.snapshot_tweet(ctx, tweet_id, minutes).await {
-                Ok(()) => snapshotted += 1,
+            match self.conn.execute(
+                "INSERT INTO metric_snapshots
+                    (tweet_id, snapshot_at, minutes_since_post, likes, retweets, replies,
+                     impressions, bookmarks, quotes, profile_clicks, url_clicks)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![
+                    tweet_id,
+                    snapshot_at,
+                    minutes,
+                    public.like_count as i64,
+                    public.retweet_count as i64,
+                    public.reply_count as i64,
+                    public.impression_count as i64,
+                    public.bookmark_count as i64,
+                    public.quote_count as i64,
+                    non_public.user_profile_clicks as i64,
+                    url_clicks,
+                ],
+            ) {
+                Ok(_) => snapshotted += 1,
                 Err(e) => {
-                    tracing::warn!(tweet_id = %tweet_id, error = %e, "Failed to snapshot");
+                    tracing::warn!(tweet_id = %tweet_id, error = %e, "insert failed");
                     errors += 1;
                 }
             }
@@ -780,108 +794,8 @@ impl PostTracker {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fetch tweet metrics via X API (standalone, no XApi dependency)
-// ---------------------------------------------------------------------------
-
-use reqwest_oauth1::OAuthClientProvider;
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct MetricsEnvelope {
-    data: Option<MetricsTweetData>,
-}
-
-#[derive(Deserialize)]
-struct MetricsTweetData {
-    #[serde(default)]
-    public_metrics: Option<MetricsPublic>,
-    #[serde(default)]
-    non_public_metrics: Option<MetricsNonPublic>,
-}
-
-#[derive(Deserialize, Default)]
-struct MetricsPublic {
-    #[serde(default)]
-    like_count: i64,
-    #[serde(default)]
-    retweet_count: i64,
-    #[serde(default)]
-    reply_count: i64,
-    #[serde(default)]
-    impression_count: i64,
-    #[serde(default)]
-    bookmark_count: i64,
-    #[serde(default)]
-    quote_count: i64,
-}
-
-#[derive(Deserialize, Default)]
-struct MetricsNonPublic {
-    #[serde(default)]
-    user_profile_clicks: i64,
-    #[serde(default)]
-    url_link_clicks: i64,
-}
-
-fn oauth_secrets(ctx: &crate::context::AppContext) -> reqwest_oauth1::Secrets<'_> {
-    let k = &ctx.config.keys;
-    reqwest_oauth1::Secrets::new(&k.api_key, &k.api_secret)
-        .token(&k.access_token, &k.access_token_secret)
-}
-
-async fn fetch_tweet_metrics(
-    ctx: &crate::context::AppContext,
-    tweet_id: &str,
-) -> Result<FetchedMetrics, XmasterError> {
-    if !ctx.config.has_x_auth() {
-        return Err(XmasterError::AuthMissing {
-            provider: "x",
-            message: "X API credentials not configured".into(),
-        });
-    }
-
-    let url = format!(
-        "https://api.x.com/2/tweets/{tweet_id}?tweet.fields=public_metrics,non_public_metrics"
-    );
-
-    let resp = ctx
-        .client
-        .clone()
-        .oauth1(oauth_secrets(ctx))
-        .get(&url)
-        .send()
-        .await?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(XmasterError::Api {
-            provider: "x",
-            code: "api_error",
-            message: format!("HTTP {status}: {text}"),
-        });
-    }
-
-    let envelope: MetricsEnvelope = resp.json().await?;
-    let tweet = envelope
-        .data
-        .ok_or_else(|| XmasterError::NotFound(format!("Tweet {tweet_id}")))?;
-
-    let pub_m = tweet.public_metrics.unwrap_or_default();
-    let non_pub = tweet.non_public_metrics.unwrap_or_default();
-
-    Ok(FetchedMetrics {
-        likes: pub_m.like_count,
-        retweets: pub_m.retweet_count,
-        replies: pub_m.reply_count,
-        impressions: pub_m.impression_count,
-        bookmarks: pub_m.bookmark_count,
-        quotes: pub_m.quote_count,
-        profile_clicks: non_pub.user_profile_clicks,
-        url_clicks: if non_pub.url_link_clicks > 0 { Some(non_pub.url_link_clicks) } else { None },
-    })
-}
+// Batched metrics fetch now lives in providers::xapi::get_posts_by_ids.
+// snapshot_all_recent above calls that helper once per 100-tweet chunk.
 
 // ---------------------------------------------------------------------------
 // Follower tracking

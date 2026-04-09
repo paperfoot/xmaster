@@ -97,6 +97,54 @@ pub struct TweetMetrics {
     pub bookmark_count: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Batch lookup types (GET /2/tweets?ids=...)
+// Kept separate from `TweetMetrics` / `TweetData` because they map a richer
+// field set (public + non_public + created_at) and need Default for the
+// 403→public-only fallback path used by `get_posts_by_ids`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TweetLookup {
+    pub id: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub public_metrics: Option<TweetLookupPublicMetrics>,
+    #[serde(default)]
+    pub non_public_metrics: Option<TweetLookupNonPublicMetrics>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TweetLookupPublicMetrics {
+    #[serde(default)]
+    pub like_count: u64,
+    #[serde(default)]
+    pub retweet_count: u64,
+    #[serde(default)]
+    pub reply_count: u64,
+    #[serde(default)]
+    pub impression_count: u64,
+    #[serde(default)]
+    pub quote_count: u64,
+    #[serde(default)]
+    pub bookmark_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TweetLookupNonPublicMetrics {
+    #[serde(default)]
+    pub url_link_clicks: u64,
+    #[serde(default)]
+    pub user_profile_clicks: u64,
+}
+
+#[derive(Deserialize, Default)]
+struct TweetLookupBatchEnvelope {
+    #[serde(default)]
+    data: Vec<TweetLookup>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
     pub id: String,
@@ -838,6 +886,99 @@ impl XApi {
     }
 
     /// Look up any tweet by ID (yours or someone else's). Only requests public metrics.
+    /// Batch fetch public + non_public metrics for up to 100 tweet IDs per HTTP call.
+    /// Results for larger inputs are chunked internally and concatenated.
+    ///
+    /// Tries the full field set first (`public_metrics,non_public_metrics,created_at`).
+    /// `non_public_metrics` is only visible for tweets the authenticated user owns.
+    /// If the batch contains only tweets you don't own, X returns 403 — this method
+    /// transparently retries the same chunk with `public_metrics` only.
+    ///
+    /// Uses the raw signed-request path rather than [`Self::request`] because the
+    /// generic helper collapses 403 into `AuthMissing`, which would break the
+    /// fallback. 401/429/5xx propagate as typed errors so the caller can retry.
+    pub async fn get_posts_by_ids(
+        &self,
+        tweet_ids: &[String],
+    ) -> Result<Vec<TweetLookup>, XmasterError> {
+        self.require_auth()?;
+        if tweet_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out: Vec<TweetLookup> = Vec::with_capacity(tweet_ids.len());
+        for chunk in tweet_ids.chunks(100) {
+            let ids_param = chunk.join(",");
+            let url_full = format!(
+                "{BASE}/tweets?ids={ids_param}&tweet.fields=public_metrics,non_public_metrics,created_at"
+            );
+            let resp = self
+                .ctx
+                .client
+                .clone()
+                .oauth1(self.secrets())
+                .get(&url_full)
+                .send()
+                .await?;
+
+            let first_status = resp.status();
+            let first_body = resp.text().await.unwrap_or_default();
+
+            if first_status.is_success() {
+                if let Ok(envelope) =
+                    serde_json::from_str::<TweetLookupBatchEnvelope>(&first_body)
+                {
+                    out.extend(envelope.data);
+                    continue;
+                }
+            }
+
+            if first_status == 401 {
+                return Err(XmasterError::AuthMissing {
+                    provider: "x",
+                    message: format!(
+                        "HTTP 401: {}",
+                        crate::utils::safe_truncate(&first_body, 200)
+                    ),
+                });
+            }
+            if first_status == 429 {
+                return Err(XmasterError::RateLimited {
+                    provider: "x",
+                    reset_at: 0,
+                });
+            }
+            if first_status.as_u16() >= 500 {
+                return Err(XmasterError::ServerError {
+                    status: first_status.as_u16(),
+                });
+            }
+
+            // 403 or other client error — retry this chunk with public fields only.
+            let url_public =
+                format!("{BASE}/tweets?ids={ids_param}&tweet.fields=public_metrics,created_at");
+            let resp = self
+                .ctx
+                .client
+                .clone()
+                .oauth1(self.secrets())
+                .get(&url_public)
+                .send()
+                .await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let text = resp.text().await.unwrap_or_default();
+                return Err(XmasterError::NotFound(format!(
+                    "Tweets {ids_param} (HTTP {status}: {})",
+                    crate::utils::safe_truncate(&text, 100)
+                )));
+            }
+            let envelope: TweetLookupBatchEnvelope = resp.json().await?;
+            out.extend(envelope.data);
+        }
+        Ok(out)
+    }
+
     pub async fn get_tweet(&self, id: &str) -> Result<TweetData, XmasterError> {
         let url = format!(
             "{BASE}/tweets/{id}?{tf}&{exp}&{uf}",

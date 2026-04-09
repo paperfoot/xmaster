@@ -264,7 +264,8 @@ impl IntelStore {
                 impressions        INTEGER NOT NULL DEFAULT 0,
                 bookmarks          INTEGER NOT NULL DEFAULT 0,
                 quotes             INTEGER NOT NULL DEFAULT 0,
-                profile_clicks     INTEGER NOT NULL DEFAULT 0
+                profile_clicks     INTEGER NOT NULL DEFAULT 0,
+                url_clicks         INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS engagement_actions (
@@ -357,6 +358,15 @@ impl IntelStore {
             }
             if !post_cols.iter().any(|c| c == "scheduled_post_id") {
                 self.conn.execute_batch("ALTER TABLE posts ADD COLUMN scheduled_post_id TEXT;")?;
+            }
+
+            // Add url_clicks to metric_snapshots if missing (legacy DBs predating the field)
+            let ms_cols: Vec<String> = self.conn
+                .prepare("PRAGMA table_info(metric_snapshots)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !ms_cols.iter().any(|c| c == "url_clicks") {
+                self.conn.execute_batch("ALTER TABLE metric_snapshots ADD COLUMN url_clicks INTEGER;")?;
             }
             Ok(())
         })();
@@ -725,7 +735,9 @@ impl IntelStore {
 
     // -- metric snapshots -----------------------------------------------------
 
-    /// Record a metric snapshot for a tweet.
+    /// Record a metric snapshot for a tweet. `url_clicks` is `Option<i64>` because
+    /// the value comes from `non_public_metrics` which is only visible for posts you own;
+    /// callers pass `None` when the data is unavailable.
     #[allow(clippy::too_many_arguments)]
     pub fn log_metric_snapshot(
         &self,
@@ -738,13 +750,14 @@ impl IntelStore {
         quotes: i64,
         profile_clicks: i64,
         minutes_since_post: i64,
+        url_clicks: Option<i64>,
     ) -> Result<(), rusqlite::Error> {
         let snapshot_at = Utc::now().timestamp();
         self.conn.execute(
             "INSERT INTO metric_snapshots
                 (tweet_id, snapshot_at, minutes_since_post, likes, retweets, replies,
-                 impressions, bookmarks, quotes, profile_clicks)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                 impressions, bookmarks, quotes, profile_clicks, url_clicks)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 tweet_id,
                 snapshot_at,
@@ -756,6 +769,7 @@ impl IntelStore {
                 bookmarks,
                 quotes,
                 profile_clicks,
+                url_clicks,
             ],
         )?;
         Ok(())
@@ -1349,13 +1363,53 @@ mod tests {
     }
 
     #[test]
+    fn metric_snapshot_persists_url_clicks() {
+        let store = test_store();
+        store
+            .log_post("tweet_url", "Check this link", "text", None, None, None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("tweet_url", 5, 1, 0, 200, 0, 0, 3, 10, Some(42))
+            .unwrap();
+        let clicks: Option<i64> = store
+            .conn
+            .query_row(
+                "SELECT url_clicks FROM metric_snapshots WHERE tweet_id = 'tweet_url'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(clicks, Some(42));
+    }
+
+    #[test]
+    fn metric_snapshot_persists_url_clicks_null_when_none() {
+        let store = test_store();
+        store
+            .log_post("tweet_null", "no link", "text", None, None, None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("tweet_null", 1, 0, 0, 10, 0, 0, 0, 5, None)
+            .unwrap();
+        let clicks: Option<i64> = store
+            .conn
+            .query_row(
+                "SELECT url_clicks FROM metric_snapshots WHERE tweet_id = 'tweet_null'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(clicks, None);
+    }
+
+    #[test]
     fn metric_snapshot_and_retrieval() {
         let store = test_store();
         store
             .log_post("tweet_metrics", "Test post", "opinion", None, None, None, None, None)
             .unwrap();
         store
-            .log_metric_snapshot("tweet_metrics", 10, 5, 3, 1000, 2, 1, 50, 60)
+            .log_metric_snapshot("tweet_metrics", 10, 5, 3, 1000, 2, 1, 50, 60, None)
             .unwrap();
 
         let posts = store.get_post_history(10).unwrap();
@@ -1527,7 +1581,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "target_tweet_1", Some("uid_42"), "hottarget", 5000, "my_reply_1");
         store
-            .log_metric_snapshot("my_reply_1", 10, 2, 1, 500, 0, 0, 3, 15)
+            .log_metric_snapshot("my_reply_1", 10, 2, 1, 500, 0, 0, 3, 15, None)
             .unwrap();
 
         let promoted = store
@@ -1544,7 +1598,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "smallfry", 500, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 10)
+            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 10, None)
             .unwrap();
 
         let promoted = store
@@ -1561,7 +1615,7 @@ mod tests {
             .unwrap();
         log_outgoing_reply(&store, "t1", Some("uid_1"), "alreadyhere", 10_000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 10)
+            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 10, None)
             .unwrap();
 
         let promoted = store
@@ -1576,7 +1630,7 @@ mod tests {
         log_outgoing_reply(&store, "t1", None, "clickytarget", 2000, "r1");
         // Low impressions but 2 profile_clicks
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 10, 0, 0, 2, 5)
+            .log_metric_snapshot("r1", 0, 0, 0, 10, 0, 0, 2, 5, None)
             .unwrap();
 
         let promoted = store
@@ -1591,7 +1645,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "replier", 5000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 10, 0, 0, 0, 3)
+            .log_metric_snapshot("r1", 0, 0, 0, 10, 0, 0, 0, 3, None)
             .unwrap();
         let action_id: i64 = store
             .conn
@@ -1628,7 +1682,7 @@ mod tests {
             )
             .unwrap();
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 10_000, 0, 0, 10, 30)
+            .log_metric_snapshot("r1", 0, 0, 0, 10_000, 0, 0, 10, 30, None)
             .unwrap();
 
         let promoted = store
@@ -1642,11 +1696,11 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "target_a", 3000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 100, 0, 0, 1, 5)
+            .log_metric_snapshot("r1", 0, 0, 0, 100, 0, 0, 1, 5, None)
             .unwrap();
         log_outgoing_reply(&store, "t2", None, "target_a", 3000, "r2");
         store
-            .log_metric_snapshot("r2", 0, 0, 0, 300, 0, 0, 3, 5)
+            .log_metric_snapshot("r2", 0, 0, 0, 300, 0, 0, 3, 5, None)
             .unwrap();
 
         let ranked = store.rank_hot_reply_targets(7, 1, 0.0, 0.0).unwrap();
@@ -1662,7 +1716,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "target_a", 3000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 5)
+            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 5, None)
             .unwrap();
 
         let ranked = store.rank_hot_reply_targets(7, 2, 0.0, 0.0).unwrap();
@@ -1674,7 +1728,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "target_a", 3000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 100, 0, 0, 0, 5)
+            .log_metric_snapshot("r1", 0, 0, 0, 100, 0, 0, 0, 5, None)
             .unwrap();
         let id1: i64 = store
             .conn
@@ -1688,7 +1742,7 @@ mod tests {
 
         log_outgoing_reply(&store, "t2", None, "target_a", 3000, "r2");
         store
-            .log_metric_snapshot("r2", 0, 0, 0, 100, 0, 0, 0, 5)
+            .log_metric_snapshot("r2", 0, 0, 0, 100, 0, 0, 0, 5, None)
             .unwrap();
         let id2: i64 = store
             .conn
@@ -1710,7 +1764,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", Some("uid_new"), "newhot", 5000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 500, 0, 0, 3, 15)
+            .log_metric_snapshot("r1", 0, 0, 0, 500, 0, 0, 3, 15, None)
             .unwrap();
 
         let hot = store
@@ -1743,7 +1797,7 @@ mod tests {
         let store = test_store();
         log_outgoing_reply(&store, "t1", None, "fresh_target", 3000, "r1");
         store
-            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 5)
+            .log_metric_snapshot("r1", 0, 0, 0, 1000, 0, 0, 5, 5, None)
             .unwrap();
         store
             .log_post("r2", "stale reply body", "text", Some("t2"), None, None, None, None)
@@ -1760,7 +1814,7 @@ mod tests {
             )
             .unwrap();
         store
-            .log_metric_snapshot("r2", 0, 0, 0, 1000, 0, 0, 5, 5)
+            .log_metric_snapshot("r2", 0, 0, 0, 1000, 0, 0, 5, 5, None)
             .unwrap();
 
         let ranked = store.rank_hot_reply_targets(7, 1, 0.0, 0.0).unwrap();

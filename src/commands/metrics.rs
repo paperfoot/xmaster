@@ -3,57 +3,18 @@ use crate::context::AppContext;
 use crate::errors::XmasterError;
 use crate::intel::store::{FullSnapshot, IntelStore};
 use crate::output::{self, CsvRenderable, OutputFormat, Tableable};
+use crate::providers::xapi::{
+    TweetLookup, TweetLookupNonPublicMetrics, TweetLookupPublicMetrics, XApi,
+};
 use chrono::{SecondsFormat, Utc};
-use reqwest_oauth1::OAuthClientProvider;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// ---------------------------------------------------------------------------
-// API response types — multi-tweet GET /2/tweets?ids=...
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, Default)]
-struct ApiBatchEnvelope {
-    #[serde(default)]
-    data: Vec<TweetMetricsData>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct TweetMetricsData {
-    id: String,
-    /// RFC3339 timestamp from X API. Requires `tweet.fields=created_at`.
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    public_metrics: Option<PublicMetrics>,
-    #[serde(default)]
-    non_public_metrics: Option<NonPublicMetrics>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct PublicMetrics {
-    #[serde(default)]
-    like_count: u64,
-    #[serde(default)]
-    retweet_count: u64,
-    #[serde(default)]
-    reply_count: u64,
-    #[serde(default)]
-    impression_count: u64,
-    #[serde(default)]
-    quote_count: u64,
-    #[serde(default)]
-    bookmark_count: u64,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct NonPublicMetrics {
-    #[serde(default)]
-    url_link_clicks: u64,
-    #[serde(default)]
-    user_profile_clicks: u64,
-}
+// Local aliases keep the rest of the file readable without hunting through
+// the xapi module — the types came from there since commit {this one}.
+type PublicMetrics = TweetLookupPublicMetrics;
+type NonPublicMetrics = TweetLookupNonPublicMetrics;
 
 // ---------------------------------------------------------------------------
 // Agent-facing output types
@@ -260,12 +221,6 @@ impl CsvRenderable for MetricsBatch {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn oauth_secrets(ctx: &AppContext) -> reqwest_oauth1::Secrets<'_> {
-    let k = &ctx.config.keys;
-    reqwest_oauth1::Secrets::new(&k.api_key, &k.api_secret)
-        .token(&k.access_token, &k.access_token_secret)
-}
-
 /// Format an elapsed duration in seconds as a compact human-readable string.
 /// Examples: `30s`, `5 min`, `2h`, `2h 15m`, `3d`, `3d 4h`.
 /// Negative values return `"future"` (clock skew).
@@ -305,94 +260,10 @@ fn parse_created_at(created_at: Option<&str>) -> Option<i64> {
         .map(|dt| dt.with_timezone(&Utc).timestamp())
 }
 
-// ---------------------------------------------------------------------------
-// HTTP: single batched fetch against GET /2/tweets?ids=ID1,ID2,...
-// Replaces the previous per-tweet GET /2/tweets/{id} loop.
-// X API allows up to 100 IDs per call.
-// ---------------------------------------------------------------------------
-
-/// Fetch metrics for up to 100 tweet IDs in a single HTTP call.
-///
-/// Tries full fields first (includes `non_public_metrics` — only visible for
-/// your own tweets). If that 403s (batch contains only tweets you don't own),
-/// falls back to `public_metrics` only.
-///
-/// Only 403 triggers the fallback. 401/429/5xx propagate.
-async fn fetch_tweet_metrics_batch(
-    ctx: &AppContext,
-    tweet_ids: &[String],
-) -> Result<Vec<TweetMetricsData>, XmasterError> {
-    if tweet_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let ids_param = tweet_ids.join(",");
-    let url_full = format!(
-        "https://api.x.com/2/tweets?ids={ids_param}&tweet.fields=public_metrics,non_public_metrics,organic_metrics,created_at"
-    );
-    let resp = ctx
-        .client
-        .clone()
-        .oauth1(oauth_secrets(ctx))
-        .get(&url_full)
-        .send()
-        .await?;
-
-    let first_status = resp.status();
-    let first_body = resp.text().await.unwrap_or_default();
-
-    if first_status.is_success() {
-        if let Ok(envelope) = serde_json::from_str::<ApiBatchEnvelope>(&first_body) {
-            return Ok(envelope.data);
-        }
-    }
-
-    if first_status == 401 {
-        return Err(XmasterError::AuthMissing {
-            provider: "x",
-            message: format!(
-                "HTTP 401: {}",
-                crate::utils::safe_truncate(&first_body, 200)
-            ),
-        });
-    }
-    if first_status == 429 {
-        return Err(XmasterError::RateLimited {
-            provider: "x",
-            reset_at: 0,
-        });
-    }
-    if first_status.as_u16() >= 500 {
-        return Err(XmasterError::ServerError {
-            status: first_status.as_u16(),
-        });
-    }
-
-    // 403 or other client error — try public-only fields.
-    let url_public = format!(
-        "https://api.x.com/2/tweets?ids={ids_param}&tweet.fields=public_metrics,created_at,author_id,text"
-    );
-    let resp = ctx
-        .client
-        .clone()
-        .oauth1(oauth_secrets(ctx))
-        .get(&url_public)
-        .send()
-        .await?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(XmasterError::NotFound(format!(
-            "Tweets {} (HTTP {status}: {})",
-            ids_param,
-            crate::utils::safe_truncate(&text, 100)
-        )));
-    }
-
-    let envelope: ApiBatchEnvelope = resp.json().await?;
-    Ok(envelope.data)
-}
+// Batch fetch of /2/tweets?ids=... now lives in providers::xapi::get_posts_by_ids.
+// The 403→public-only fallback, chunking into groups of 100, and typed errors
+// are all handled there so both `metrics` and `track run` share the same code
+// path.
 
 // ---------------------------------------------------------------------------
 // Delta + velocity computation against the local metric_snapshots history.
@@ -473,8 +344,13 @@ pub async fn execute_batch(
 
     let mut rows: Vec<MetricsRow> = Vec::with_capacity(tweet_ids.len());
 
+    // XApi chunks internally into 100s, but we still iterate outer chunks so a
+    // single chunk failure doesn't abort the whole batch.
+    let api = XApi::new(ctx.clone());
+
     for chunk in tweet_ids.chunks(100) {
-        let tweets = match fetch_tweet_metrics_batch(&ctx, chunk).await {
+        let chunk_ids: Vec<String> = chunk.to_vec();
+        let tweets = match api.get_posts_by_ids(&chunk_ids).await {
             Ok(tweets) => tweets,
             Err(e) => {
                 // On batch failure, emit a warning for each ID in this chunk and skip.
@@ -486,7 +362,7 @@ pub async fn execute_batch(
         };
 
         // Index by id so we preserve the caller's requested order in the output.
-        let mut by_id: HashMap<String, TweetMetricsData> = tweets
+        let mut by_id: HashMap<String, TweetLookup> = tweets
             .into_iter()
             .map(|tweet| (tweet.id.clone(), tweet))
             .collect();
@@ -516,6 +392,13 @@ pub async fn execute_batch(
                 // Save the current snapshot so the NEXT call has a baseline.
                 // Minutes-since-post is best-effort; falls back to 0 when unknown.
                 let minutes_since_post = age_seconds.map(|a| a / 60).unwrap_or(0);
+                // Store Some(0) when non_public_metrics was present (real zero),
+                // None only when absent (403 fallback). Distinguishing "no data"
+                // from "0 clicks" is the whole point of making this Optional.
+                let url_clicks = tweet
+                    .non_public_metrics
+                    .as_ref()
+                    .map(|np| np.url_link_clicks as i64);
                 let _ = store.log_metric_snapshot(
                     &tweet.id,
                     public.like_count as i64,
@@ -526,6 +409,7 @@ pub async fn execute_batch(
                     public.quote_count as i64,
                     non_public.user_profile_clicks as i64,
                     minutes_since_post,
+                    url_clicks,
                 );
 
                 (delta, velocity)
