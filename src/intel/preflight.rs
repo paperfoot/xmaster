@@ -199,7 +199,7 @@ pub fn analyze(text: &str, ctx: &AnalyzeContext) -> PreflightResult {
         issues.push(Issue {
             severity: Severity::Critical,
             code: "link_in_body".into(),
-            message: "External link in tweet body kills reach — X suppresses linked tweets".into(),
+            message: "External link in tweet body kills reach — non-Premium accounts get near-zero engagement, Premium accounts lose 30-50% reach (Q1 2026 data)".into(),
             fix: Some("Move the link to a reply instead".into()),
         });
         score -= 30;
@@ -282,7 +282,7 @@ pub fn analyze(text: &str, ctx: &AnalyzeContext) -> PreflightResult {
         issues.push(Issue {
             severity: Severity::Info,
             code: "no_question".into(),
-            message: "No question mark — questions drive replies (~20x weight, estimated)".into(),
+            message: "No question mark — questions drive replies (reply_engaged_by_author is +75, the single highest signal)".into(),
             fix: Some("Consider ending with a question to invite discussion".into()),
         });
         score -= 5;
@@ -330,6 +330,38 @@ pub fn analyze(text: &str, ctx: &AnalyzeContext) -> PreflightResult {
 
     if features.est_dwell_seconds >= 10.0 {
         score += 5;
+    }
+
+    // --- Author diversity penalty warning ---
+    // The algorithm only shows 2-3 of your posts per feed session.
+    // Posting more than 3x in 6h dilutes your average performance without
+    // adding reach. Check the store for recent posting velocity.
+    if let Ok(store) = crate::intel::store::IntelStore::open() {
+        if let Ok(velocity) = store.get_recent_post_velocity() {
+            if velocity.posts_6h >= 3 {
+                issues.push(Issue {
+                    severity: Severity::Warning,
+                    code: "author_diversity_penalty".into(),
+                    message: format!(
+                        "{} posts in the last 6h — author diversity scorer limits you to 2-3 per feed session, extra posts dilute your average without adding reach",
+                        velocity.posts_6h
+                    ),
+                    fix: Some("Wait at least 2 hours between posts — fewer, better posts outperform high volume".into()),
+                });
+                score -= 15;
+            } else if velocity.posts_1h >= 1 {
+                issues.push(Issue {
+                    severity: Severity::Info,
+                    code: "recent_post".into(),
+                    message: format!(
+                        "You posted {} time(s) in the last hour — the algorithm's 30-60 min distribution gate means your previous post may still be in its critical traction window",
+                        velocity.posts_1h
+                    ),
+                    fix: Some("Consider waiting — posting now may split attention from your previous post's traction window".into()),
+                });
+                score -= 5;
+            }
+        }
     }
 
     // --- Sentiment check ---

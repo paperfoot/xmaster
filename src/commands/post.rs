@@ -109,20 +109,32 @@ pub async fn execute(
     }
 
     // ── Cannibalization check (is a recent post still gaining traction?) ──
+    // The algorithm's author_diversity_scorer applies exponential decay to
+    // repeated authors in a feed session. Posting while a previous post is
+    // in its 30-60 min traction window actively hurts both posts.
     if let Ok(store) = IntelStore::open() {
-        let velocity = store.get_recent_post_velocity();
-        if let Ok(v) = velocity {
+        if let Ok(v) = store.get_recent_post_velocity() {
             if let Some(ref accel_id) = v.accelerating_post {
+                let warning = format!(
+                    "Your post {} is still gaining traction — posting now splits the 30-60 min distribution window",
+                    &accel_id[..accel_id.len().min(12)]
+                );
+                warnings.push(format!("[WARN] {warning}"));
                 if format == OutputFormat::Table {
-                    eprintln!(
-                        "Note: Your post {} is still gaining traction. Consider waiting.",
-                        &accel_id[..accel_id.len().min(12)]
-                    );
+                    eprintln!("Warning: {warning}");
+                }
+            }
+            if v.posts_6h >= 3 {
+                let warning = format!(
+                    "{} posts in last 6h — author diversity penalty means only your top 2-3 get shown",
+                    v.posts_6h
+                );
+                warnings.push(format!("[WARN] {warning}"));
+                if format == OutputFormat::Table {
+                    eprintln!("Warning: {warning}");
                 }
             }
         }
-    } else if format == OutputFormat::Table {
-        eprintln!("Warning: Could not open intelligence store");
     }
 
     // ── Execute the post ──
