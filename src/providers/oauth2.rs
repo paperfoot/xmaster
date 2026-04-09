@@ -380,3 +380,44 @@ pub async fn oauth2_get(
     let json: serde_json::Value = resp.json().await?;
     Ok(json)
 }
+
+/// Get an OAuth 2.0 App-Only bearer token via client_credentials grant.
+/// Some endpoints (e.g. /2/tweets/counts/recent) require App-Only auth
+/// and reject User Context tokens.
+///
+/// Uses the OAuth 1.0a api_key + api_secret (which are the app's consumer
+/// credentials) with HTTP Basic auth against the v2 token endpoint, per
+/// the X Developer Platform docs.
+pub async fn get_app_only_bearer(config: &AppConfig) -> Result<String, XmasterError> {
+    let api_key = &config.keys.api_key;
+    let api_secret = &config.keys.api_secret;
+    if api_key.is_empty() || api_secret.is_empty() {
+        return Err(XmasterError::AuthMissing {
+            provider: "x-oauth2",
+            message: "API key and secret required for App-Only auth.".into(),
+        });
+    }
+
+    let client = build_oauth2_client()?;
+    let resp = client
+        .post("https://api.x.com/oauth2/token")
+        .basic_auth(api_key, Some(api_secret))
+        .form(&[("grant_type", "client_credentials")])
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(XmasterError::AuthMissing {
+            provider: "x-oauth2",
+            message: format!("App-Only token request failed: {text}"),
+        });
+    }
+
+    #[derive(Deserialize)]
+    struct BearerResponse {
+        access_token: String,
+    }
+    let body: BearerResponse = resp.json().await?;
+    Ok(body.access_token)
+}

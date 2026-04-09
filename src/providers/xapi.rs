@@ -164,6 +164,7 @@ pub struct UserResponse {
 
 pub type UserData = UserResponse;
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrendData {
     pub name: String,
@@ -1421,6 +1422,10 @@ impl XApi {
     }
 
     // -- Search -------------------------------------------------------------
+
+    // Note: GET /2/tweets/counts/recent requires OAuth 2.0 App-Only auth
+    // and is called directly from src/commands/volume.rs using oauth2_get.
+    // Not routed through XApi because XApi uses OAuth 1.0a User Context.
 
     /// Search for users by keyword. Wraps GET /2/users/search.
     /// Returns users with full public metrics so callers get follower counts.

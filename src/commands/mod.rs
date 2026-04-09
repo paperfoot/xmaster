@@ -28,6 +28,7 @@ pub mod inspire;
 pub mod tweet_engagement;
 pub mod quotes;
 pub mod amplifiers;
+pub mod volume;
 
 use crate::cli::{Cli, Commands, ConfigCommands, DmCommands, EngageCommands, WatchlistCommands, ListCommands, TrackCommands, ReportCommands, SuggestCommands, ScheduleCommands, BookmarkCommands, SkillCommands};
 use crate::context::AppContext;
@@ -76,6 +77,7 @@ fn command_name(cmd: &Commands) -> &'static str {
         Commands::Retweeters { .. } => "retweeters",
         Commands::Quotes { .. } => "quotes",
         Commands::Users { .. } => "users",
+        Commands::Volume { .. } => "volume",
         Commands::Amplifiers { .. } => "amplifiers",
         Commands::RateLimits => "rate-limits",
         Commands::Block { .. } => "block",
@@ -220,6 +222,8 @@ pub async fn dispatch(
             BookmarkCommands::Export { output, unread } => bookmarks_cmd::export(format, output.as_deref(), *unread).await,
             BookmarkCommands::Digest { days } => bookmarks_cmd::digest(format, *days).await,
             BookmarkCommands::Stats => bookmarks_cmd::stats(format).await,
+            BookmarkCommands::Folders => bookmarks_cmd::folders(ctx, format).await,
+            BookmarkCommands::Folder { id, count } => bookmarks_cmd::folder(ctx, format, id, *count).await,
         },
         Commands::Followers { username, count } => social::followers(ctx, format, username, *count).await,
         Commands::Following { username, count } => social::following(ctx, format, username, *count).await,
@@ -291,6 +295,7 @@ pub async fn dispatch(
         Commands::Retweeters { id, count } => tweet_engagement::retweeters(ctx, format, id, *count).await,
         Commands::Quotes { id, count } => quotes::execute(ctx, format, id, *count).await,
         Commands::Users { usernames } => user::bulk(ctx, format, usernames).await,
+        Commands::Volume { query, granularity } => volume::execute(ctx, format, query, granularity).await,
         Commands::Amplifiers { count } => amplifiers::execute(ctx, format, *count).await,
         Commands::RateLimits => rate_limits::execute(ctx, format).await,
         Commands::Block { username } => moderation::block(ctx, format, username).await,

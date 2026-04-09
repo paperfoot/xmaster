@@ -516,3 +516,118 @@ pub async fn stats(format: OutputFormat) -> Result<(), XmasterError> {
     output::render(format, &display, None);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Bookmark folders (OAuth2)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct FolderRow {
+    id: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct FolderListDisplay {
+    folders: Vec<FolderRow>,
+}
+
+impl Tableable for FolderListDisplay {
+    fn to_table(&self) -> comfy_table::Table {
+        let mut table = comfy_table::Table::new();
+        table.set_header(vec!["ID", "Name"]);
+        for f in &self.folders {
+            table.add_row(vec![&f.id, &f.name]);
+        }
+        table
+    }
+}
+
+/// List the authenticated user's bookmark folders.
+/// Wraps GET /2/users/:id/bookmarks/folders (OAuth2 required).
+pub async fn folders(
+    ctx: Arc<AppContext>,
+    format: OutputFormat,
+) -> Result<(), XmasterError> {
+    let token = crate::providers::oauth2::ensure_oauth2_token(&ctx.config).await?;
+    let api = XApi::new(ctx.clone());
+    let user_id = api.get_me().await?.id;
+    let url = format!(
+        "https://api.x.com/2/users/{user_id}/bookmarks/folders"
+    );
+    let json = crate::providers::oauth2::oauth2_get(&url, &token).await?;
+    let data = json
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let folders: Vec<FolderRow> = data
+        .into_iter()
+        .filter_map(|f| {
+            Some(FolderRow {
+                id: f.get("id")?.as_str()?.to_string(),
+                name: f.get("name")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+
+    if folders.is_empty() {
+        return Err(XmasterError::NotFound("No bookmark folders found.".into()));
+    }
+
+    output::render(format, &FolderListDisplay { folders }, None);
+    Ok(())
+}
+
+/// List bookmarks in a specific folder.
+/// Wraps GET /2/users/:id/bookmarks/folders/:folder_id (OAuth2 required).
+pub async fn folder(
+    ctx: Arc<AppContext>,
+    format: OutputFormat,
+    folder_id: &str,
+    count: usize,
+) -> Result<(), XmasterError> {
+    let token = crate::providers::oauth2::ensure_oauth2_token(&ctx.config).await?;
+    let api = XApi::new(ctx.clone());
+    let user_id = api.get_me().await?.id;
+    let per_page = count.min(100);
+    let url = format!(
+        "https://api.x.com/2/users/{user_id}/bookmarks/folders/{folder_id}?max_results={per_page}&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name"
+    );
+    let json = crate::providers::oauth2::oauth2_get(&url, &token).await?;
+    let tweets = parse_bookmark_response(&json);
+
+    if tweets.is_empty() {
+        return Err(XmasterError::NotFound(format!(
+            "No bookmarks in folder {folder_id}"
+        )));
+    }
+
+    let records: Vec<BookmarkRecord> = tweets
+        .into_iter()
+        .map(|t| {
+            let metrics = t.public_metrics.as_ref();
+            BookmarkRecord {
+                tweet_id: t.id,
+                author_username: t
+                    .author_username
+                    .unwrap_or_else(|| t.author_id.unwrap_or_default()),
+                author_name: None,
+                text: t.text,
+                created_at: t.created_at.clone(),
+                bookmarked_at: chrono::Utc::now().timestamp(),
+                likes: metrics.map(|m| m.like_count as i64).unwrap_or(0),
+                retweets: metrics.map(|m| m.retweet_count as i64).unwrap_or(0),
+                replies: metrics.map(|m| m.reply_count as i64).unwrap_or(0),
+                has_media: false,
+                has_link: false,
+                tags: String::new(),
+                notes: String::new(),
+                read: false,
+            }
+        })
+        .collect();
+    output::render(format, &records_to_list(records), None);
+    Ok(())
+}

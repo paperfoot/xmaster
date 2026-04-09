@@ -308,6 +308,15 @@ pub enum Commands {
         usernames: Vec<String>,
     },
 
+    /// Show recent tweet volume for a search query over time
+    Volume {
+        /// Search query
+        query: String,
+        /// Time granularity: minute, hour, day
+        #[arg(long, default_value = "hour")]
+        granularity: String,
+    },
+
     /// Show who amplifies your content (users who repost your tweets)
     Amplifiers {
         /// Max reposts to scan (10-100)
@@ -735,6 +744,16 @@ pub enum BookmarkCommands {
     },
     /// Show bookmark statistics
     Stats,
+    /// List bookmark folders
+    Folders,
+    /// List bookmarks in a specific folder
+    Folder {
+        /// Folder ID
+        id: String,
+        /// Number of bookmarks to fetch
+        #[arg(long, short, alias = "limit", default_value = "20")]
+        count: usize,
+    },
 }
 
 /// Parse a tweet ID from a URL or raw ID string.
