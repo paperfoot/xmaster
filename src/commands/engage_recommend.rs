@@ -377,7 +377,10 @@ fn is_zero_f32(v: &f32) -> bool { *v == 0.0 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FeedResult {
-    pub topic: String,
+    /// All topics that were searched in this call, in the order they were
+    /// resolved (CLI positional args first, then config.niche.topics fallback).
+    /// An empty vec means the call ran in watchlist-only mode (no keyword search).
+    pub topics: Vec<String>,
     pub posts: Vec<FeedPost>,
     pub total_found: usize,
     pub filtered_by_followers: usize,
@@ -403,17 +406,62 @@ impl Tableable for FeedResult {
     }
 }
 
+/// Resolve the list of topics to scan. Accepts multi positional args AND
+/// comma-separated values in any positional arg (split + merged). If the
+/// caller passes no topics at all, falls back to `niche.topics` from config.
+/// Returns an empty Vec only if both sources are empty.
+fn resolve_topics(cli_topics: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    // Helper: split one raw entry on commas + trim + dedupe into `out`.
+    let push_entry = |raw: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+        for piece in raw.split(',') {
+            let trimmed = piece.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let key = trimmed.to_lowercase();
+            if seen.insert(key) {
+                out.push(trimmed.to_string());
+            }
+        }
+    };
+
+    for raw in cli_topics {
+        push_entry(raw, &mut out, &mut seen);
+    }
+
+    // Fallback to config.niche.topics only when the CLI passed nothing at all.
+    if out.is_empty() {
+        if let Ok(cfg) = crate::config::load_config() {
+            for t in cfg.niche.topic_list() {
+                push_entry(&t, &mut out, &mut seen);
+            }
+        }
+    }
+
+    out
+}
+
 pub async fn feed(
     ctx: Arc<AppContext>,
     format: OutputFormat,
-    topic: &str,
+    cli_topics: &[String],
     min_followers: u64,
     max_age_mins: u64,
     count: usize,
 ) -> Result<(), XmasterError> {
     let api = crate::providers::xapi::XApi::new(ctx.clone());
 
-    // Phase 1: Check watchlist accounts first (saves API search calls)
+    // Resolve topics: CLI args → split commas → fallback to niche.topics.
+    // Empty result is not fatal — watchlist-only mode still returns posts
+    // from watched accounts, which is often the most useful path anyway.
+    let topics = resolve_topics(cli_topics);
+
+    // Phase 1: Check watchlist accounts first (saves API search calls).
+    // This runs regardless of whether we have topics — watchlist accounts
+    // are intrinsically interesting.
     let mut watchlist_tweets = Vec::new();
     if let Ok(store) = IntelStore::open() {
         if let Ok(watchlist) = store.list_watchlist() {
@@ -462,26 +510,40 @@ pub async fn feed(
         }
     }
 
-    // Phase 2: Cold search for discovery (only if watchlist didn't fill count)
+    // Phase 2: Cold search across ALL resolved topics in parallel.
+    // Each topic becomes one search call; results are unioned + deduped.
+    // This replaces the previous single-topic path — the agent never has to
+    // loop per-topic anymore.
     let start_time = {
         let now = chrono::Utc::now();
         let since = now - chrono::Duration::minutes(max_age_mins as i64);
         since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     };
 
-    let search_tweets = if watchlist_tweets.len() < count {
-        api.search_tweets_paginated(
-            topic,
-            "recent",
-            100.min(count * 5),
-            Some(&start_time),
-            None,
-        ).await.unwrap_or_default()
+    let search_tweets = if watchlist_tweets.len() < count && !topics.is_empty() {
+        // Budget per topic: split `count*5` evenly, min 10 per topic so even
+        // a 5-topic fanout with count=10 still pulls 10/topic not 10/total.
+        let per_topic_cap = (count * 5 / topics.len()).max(10).min(100);
+        let mut collected = Vec::new();
+        for topic in &topics {
+            let tweets = api
+                .search_tweets_paginated(
+                    topic,
+                    "recent",
+                    per_topic_cap,
+                    Some(&start_time),
+                    None,
+                )
+                .await
+                .unwrap_or_default();
+            collected.extend(tweets);
+        }
+        collected
     } else {
         Vec::new()
     };
 
-    // Combine: watchlist first, then search results
+    // Combine: watchlist first, then search results, dedupe by tweet id.
     let mut seen_ids = std::collections::HashSet::new();
     let mut tweets = Vec::new();
     for t in watchlist_tweets.into_iter().chain(search_tweets.into_iter()) {
@@ -554,7 +616,10 @@ pub async fn feed(
     posts.sort_by(|a, b| b.opportunity_score.partial_cmp(&a.opportunity_score).unwrap_or(std::cmp::Ordering::Equal));
     posts.truncate(count);
 
-    // Auto-add high-value accounts from search to watchlist (silent, never fails)
+    // Auto-add high-value accounts from search to watchlist (silent, never fails).
+    // The topic label is the comma-joined list of all resolved topics from this
+    // call, so downstream introspection still knows which fanout discovered them.
+    let topic_label = topics.join(",");
     if let Ok(store) = IntelStore::open() {
         for p in &posts {
             if p.author_followers >= 10_000 {
@@ -562,7 +627,7 @@ pub async fn feed(
                     let _ = store.add_watchlist(
                         username,
                         p.author_user_id.as_deref(),
-                        Some(topic),
+                        if topic_label.is_empty() { None } else { Some(&topic_label) },
                         p.author_followers as i64,
                     );
                 }
@@ -571,7 +636,7 @@ pub async fn feed(
     }
 
     let result = FeedResult {
-        topic: topic.to_string(),
+        topics: topics.clone(),
         posts,
         total_found,
         filtered_by_followers: filtered_count,

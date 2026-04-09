@@ -91,8 +91,8 @@ pub async fn dispatch(
             EngageCommands::Recommend { topic, min_followers, count } => {
                 engage_recommend::recommend(ctx, format, topic.as_deref(), *min_followers, *count).await
             }
-            EngageCommands::Feed { topic, min_followers, max_age_mins, count } => {
-                engage_recommend::feed(ctx, format, topic, *min_followers, *max_age_mins, *count).await
+            EngageCommands::Feed { topics, min_followers, max_age_mins, count } => {
+                engage_recommend::feed(ctx, format, topics, *min_followers, *max_age_mins, *count).await
             }
             EngageCommands::Watchlist { action } => match action {
                 WatchlistCommands::Add { username, topic } => {

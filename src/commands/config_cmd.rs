@@ -142,6 +142,7 @@ pub async fn get(format: OutputFormat, key: &str) -> Result<(), XmasterError> {
     let cfg = config::load_config()?;
     let value = match key {
         "style.voice" => cfg.style.voice.clone(),
+        "niche.topics" => cfg.niche.topics.clone(),
         "account.premium" => cfg.account.premium.to_string(),
         "settings.timeout" => cfg.settings.timeout.to_string(),
         "keys.xai" => mask(&cfg.keys.xai),

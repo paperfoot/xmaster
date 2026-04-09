@@ -17,6 +17,33 @@ pub struct AppConfig {
     pub style: Style,
     #[serde(default)]
     pub account: AccountConfig,
+    #[serde(default)]
+    pub niche: Niche,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Niche {
+    /// Comma-separated list of topics the user is interested in, used as the
+    /// default fanout for `xmaster engage feed` when no topic is passed.
+    /// Example: "AI science,biotech longevity,gene therapy,longevity research".
+    /// Set via: xmaster config set niche.topics "AI,biotech,gene therapy"
+    #[serde(default)]
+    pub topics: String,
+}
+
+impl Niche {
+    /// Parse the comma-separated `topics` field into a deduped, trimmed Vec.
+    /// Empty string returns an empty Vec.
+    pub fn topic_list(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        self.topics
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter(|s| seen.insert(s.to_lowercase()))
+            .map(str::to_string)
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

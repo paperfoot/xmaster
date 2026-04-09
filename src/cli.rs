@@ -400,17 +400,30 @@ pub enum EngageCommands {
         #[command(subcommand)]
         action: WatchlistCommands,
     },
-    /// Find fresh posts from big accounts to reply to NOW
+    /// Find fresh posts from big accounts to reply to NOW.
+    ///
+    /// Accepts multiple topics positionally AND as comma-separated lists
+    /// (they are merged + deduped). If no topics are passed, falls back to
+    /// `niche.topics` from config, enabling zero-arg multi-topic fanout
+    /// in a single call. Results are unioned across all topics and ranked
+    /// together, so the agent never needs to loop per-topic.
+    ///
+    /// Examples:
+    ///   xmaster engage feed "AI science"
+    ///   xmaster engage feed "AI science" "biotech longevity" "gene therapy"
+    ///   xmaster engage feed "AI,biotech,gene therapy"
+    ///   xmaster engage feed                       # uses niche.topics
     Feed {
-        /// Topic/niche to find posts in
-        topic: String,
+        /// Zero or more topics/niches to scan. Comma-separated values are
+        /// split and merged with positional entries.
+        topics: Vec<String>,
         /// Minimum follower count for authors
         #[arg(long, default_value = "5000")]
         min_followers: u64,
         /// Maximum age in minutes (default: 60)
         #[arg(long, default_value = "60")]
         max_age_mins: u64,
-        /// Number of posts to return
+        /// Number of posts to return (unified across all topics)
         #[arg(long, short, default_value = "10")]
         count: usize,
     },
