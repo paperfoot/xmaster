@@ -37,6 +37,21 @@ pub struct PendingReply {
     pub performed_at: i64,
 }
 
+/// Full metric snapshot row — used by the metrics command to compute deltas.
+/// Unlike `SnapshotRecord` (which is a summary), this includes snapshot_at + all counters.
+#[derive(Debug, Clone)]
+pub struct FullSnapshot {
+    pub snapshot_at: i64,
+    pub minutes_since_post: i64,
+    pub likes: i64,
+    pub retweets: i64,
+    pub replies: i64,
+    pub impressions: i64,
+    pub bookmarks: i64,
+    pub quotes: i64,
+    pub profile_clicks: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PostRecord {
     pub tweet_id: String,
@@ -722,6 +737,44 @@ impl IntelStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Fetch the most recent metric snapshot for a tweet with all counters + timestamps.
+    /// Returns None if no snapshot exists yet for this tweet_id.
+    ///
+    /// NOTE: `snapshot_at` is CAST to INTEGER because legacy rows were stored
+    /// with TEXT affinity despite the schema declaring INTEGER. The CAST
+    /// handles both old text and new numeric rows; ORDER BY also casts so
+    /// lexicographic ordering on text timestamps doesn't pick a stale row.
+    pub fn latest_snapshot_full(
+        &self,
+        tweet_id: &str,
+    ) -> Result<Option<FullSnapshot>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT CAST(snapshot_at AS INTEGER), minutes_since_post,
+                        likes, retweets, replies,
+                        impressions, bookmarks, quotes, profile_clicks
+                 FROM metric_snapshots
+                 WHERE tweet_id = ?1
+                 ORDER BY CAST(snapshot_at AS INTEGER) DESC
+                 LIMIT 1",
+                params![tweet_id],
+                |row| {
+                    Ok(FullSnapshot {
+                        snapshot_at: row.get(0)?,
+                        minutes_since_post: row.get(1)?,
+                        likes: row.get(2)?,
+                        retweets: row.get(3)?,
+                        replies: row.get(4)?,
+                        impressions: row.get(5)?,
+                        bookmarks: row.get(6)?,
+                        quotes: row.get(7)?,
+                        profile_clicks: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
     }
 
     /// Log an engagement action (like, reply, retweet, etc.).
