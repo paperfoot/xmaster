@@ -390,8 +390,20 @@ impl XApi {
             *self.last_rate_limit.lock().await = Some(rl);
         }
 
+        // Capture x-transaction-id for error diagnostics (X returns this on
+        // every response; it's the only way to correlate with X support).
+        let txn_id = resp
+            .headers()
+            .get("x-transaction-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         if status == 401 || status == 403 {
             let text = resp.text().await.unwrap_or_default();
+            let txn_suffix = txn_id
+                .as_deref()
+                .map(|id| format!(" [txn: {id}]"))
+                .unwrap_or_default();
             let message = if text.contains("oauth1-permissions") {
                 format!(
                     "HTTP {status} Forbidden: {text}. \
@@ -401,7 +413,7 @@ impl XApi {
                     xmaster config set keys.access_token_secret NEW_SECRET"
                 )
             } else {
-                format!("HTTP {status}: {text}")
+                format!("HTTP {status}: {text}{txn_suffix}")
             };
             return Err(XmasterError::AuthMissing {
                 provider: "x",
@@ -459,10 +471,14 @@ impl XApi {
                 .as_str()
                 .or_else(|| val["title"].as_str())
                 .unwrap_or("Unknown error");
+            let txn_suffix = txn_id
+                .as_deref()
+                .map(|id| format!(" [txn: {id}]"))
+                .unwrap_or_default();
             return Err(XmasterError::Api {
                 provider: "x",
                 code: "api_error",
-                message: format!("HTTP {status}: {msg}"),
+                message: format!("HTTP {status}: {msg}{txn_suffix}"),
             });
         }
 

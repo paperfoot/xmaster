@@ -214,7 +214,14 @@ impl IntelStore {
         let dir = config_dir();
         std::fs::create_dir_all(&dir).ok();
         let db_path: PathBuf = dir.join("xmaster.db");
-        let conn = Connection::open(db_path)?;
+        Self::open_at(&db_path)
+    }
+
+    /// Open the database at an explicit path. Used by tests to avoid the
+    /// process-wide `XMASTER_CONFIG_DIR` env var that causes race conditions
+    /// when `cargo test` runs in parallel.
+    pub fn open_at(path: &std::path::Path) -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -368,6 +375,22 @@ impl IntelStore {
             if !ms_cols.iter().any(|c| c == "url_clicks") {
                 self.conn.execute_batch("ALTER TABLE metric_snapshots ADD COLUMN url_clicks INTEGER;")?;
             }
+
+            // NOTE: engagement_actions.performed_at has TEXT column affinity
+            // (declared TEXT in tracker.rs original CREATE TABLE). SQLite's
+            // UPDATE ... SET col = CAST(col AS INTEGER) does NOT change the
+            // stored type when the declared column affinity is TEXT. The only
+            // real fix is DROP + CREATE TABLE with INTEGER affinity + INSERT
+            // from old. That's tracked in issue #3 and too risky for an
+            // additive migration. Queries on performed_at MUST use CAST
+            // guards until the table rebuild lands.
+            //
+            // metric_snapshots.snapshot_at was declared INTEGER in store.rs
+            // (correct affinity) so the IntelStore path stores INTEGER values.
+            // However the tracker.rs CREATE TABLE declared it differently in
+            // older versions, so existing rows may be text. The CAST in
+            // latest_snapshot_full handles this case.
+
             Ok(())
         })();
         match migrate_result {
@@ -375,11 +398,15 @@ impl IntelStore {
             Err(e) => { self.conn.execute_batch("ROLLBACK;").ok(); return Err(e); }
         }
 
-        // reply_outcomes view: join engagement_actions (replies) to metric snapshots
+        // reply_outcomes view v2: extended with profile_clicks, quotes,
+        // url_clicks, snapshot_at, minutes_since_post, and target_user_id.
+        // DROP + CREATE because views hold no data. Safe on every open.
+        self.conn.execute_batch("DROP VIEW IF EXISTS reply_outcomes;")?;
         self.conn.execute_batch(
-            "CREATE VIEW IF NOT EXISTS reply_outcomes AS
+            "CREATE VIEW reply_outcomes AS
              SELECT ea.id AS action_id,
                     ea.target_tweet_id,
+                    ea.target_user_id,
                     ea.target_username,
                     ea.target_followers,
                     ea.reply_tweet_id,
@@ -390,7 +417,12 @@ impl IntelStore {
                     ms.retweets,
                     ms.replies,
                     ms.impressions,
-                    ms.bookmarks
+                    ms.bookmarks,
+                    ms.quotes,
+                    ms.profile_clicks,
+                    ms.url_clicks,
+                    CAST(ms.snapshot_at AS INTEGER) AS snapshot_at,
+                    ms.minutes_since_post
              FROM engagement_actions ea
              LEFT JOIN metric_snapshots ms
                ON ms.tweet_id = ea.reply_tweet_id
@@ -778,22 +810,20 @@ impl IntelStore {
     /// Fetch the most recent metric snapshot for a tweet with all counters + timestamps.
     /// Returns None if no snapshot exists yet for this tweet_id.
     ///
-    /// NOTE: `snapshot_at` is CAST to INTEGER because legacy rows were stored
-    /// with TEXT affinity despite the schema declaring INTEGER. The CAST
-    /// handles both old text and new numeric rows; ORDER BY also casts so
-    /// lexicographic ordering on text timestamps doesn't pick a stale row.
+    /// Fetch the most recent metric snapshot for a tweet with all counters + timestamps.
+    /// Returns None if no snapshot exists yet for this tweet_id.
     pub fn latest_snapshot_full(
         &self,
         tweet_id: &str,
     ) -> Result<Option<FullSnapshot>, rusqlite::Error> {
         self.conn
             .query_row(
-                "SELECT CAST(snapshot_at AS INTEGER), minutes_since_post,
+                "SELECT snapshot_at, minutes_since_post,
                         likes, retweets, replies,
                         impressions, bookmarks, quotes, profile_clicks
                  FROM metric_snapshots
                  WHERE tweet_id = ?1
-                 ORDER BY CAST(snapshot_at AS INTEGER) DESC
+                 ORDER BY snapshot_at DESC
                  LIMIT 1",
                 params![tweet_id],
                 |row| {
@@ -1124,9 +1154,10 @@ impl IntelStore {
     /// Freshness: only considers replies in the last `max_age_hours`.
     /// Excludes targets already on the watchlist.
     ///
-    /// NOTE: `performed_at` is CAST to INTEGER because legacy rows in production
-    /// DBs were stored with TEXT affinity despite the schema declaring INTEGER.
-    /// Same class of bug as `metric_snapshots.snapshot_at` — see latest_snapshot_full.
+    /// Find reply targets that deserve promotion to watchlist based on recent reply outcomes.
+    ///
+    /// Same TEXT-affinity caveat as `rank_hot_reply_targets` — CAST guards
+    /// on `performed_at` remain until a full table rebuild migration.
     pub fn find_hot_reply_targets(
         &self,
         min_impressions: i64,
@@ -1177,8 +1208,13 @@ impl IntelStore {
     /// Filters by min_samples, min_avg_impressions, min_avg_profile_clicks (HAVING).
     /// Returns rows sorted by composite score descending. Caller can re-sort.
     ///
-    /// NOTE: `performed_at` is CAST to INTEGER for the same legacy TEXT-affinity
-    /// reason documented on `find_hot_reply_targets` and `latest_snapshot_full`.
+    /// Aggregate reply-outcome stats per target username over the last `days`.
+    ///
+    /// NOTE: `performed_at` still has TEXT affinity in production DBs (the column
+    /// was declared TEXT in the original tracker.rs CREATE TABLE and SQLite's
+    /// CAST-in-UPDATE trick doesn't fix cell types when the declared affinity
+    /// disagrees). We must keep CAST in comparisons and MAX() until a full table
+    /// rebuild migration lands.
     pub fn rank_hot_reply_targets(
         &self,
         days: i64,
@@ -1290,8 +1326,8 @@ mod tests {
 
     fn test_store() -> IntelStore {
         let dir = tempdir().unwrap();
-        std::env::set_var("XMASTER_CONFIG_DIR", dir.path());
-        let store = IntelStore::open().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = IntelStore::open_at(&db_path).unwrap();
         // Keep tempdir alive by leaking it (tests are short-lived)
         std::mem::forget(dir);
         store

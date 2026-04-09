@@ -206,19 +206,32 @@ pub async fn execute(
             None,
         );
 
-        // Log reply for reciprocity tracking with style classification
+        // Log reply for reciprocity tracking with style classification.
+        // ALWAYS log the reply even if we can't fetch the target tweet
+        // (deleted tweet, rate limit, network blip). We lose follower count
+        // on the failure path but preserve the correlation so the reply
+        // participates in hot-targets, reply-back tracking, and engage
+        // recommend scoring. Previously a get_tweet failure silently
+        // dropped the entire log_reply call.
         if let Some(ref target_id) = reply_id {
             let style = IntelStore::classify_reply_style(text);
-            if let Ok(target_tweet) = api.get_tweet(target_id).await {
-                let _ = store.log_reply(
-                    target_id,
-                    target_tweet.author_id.as_deref(),
-                    target_tweet.author_username.as_deref(),
-                    target_tweet.author_followers.map(|f| f as i64),
-                    &result.id,
-                    Some(&style),
-                );
-            }
+            let (target_uid, target_uname, target_followers) =
+                match api.get_tweet(target_id).await {
+                    Ok(t) => (
+                        t.author_id.clone(),
+                        t.author_username.clone(),
+                        t.author_followers.map(|f| f as i64),
+                    ),
+                    Err(_) => (None, None, None),
+                };
+            let _ = store.log_reply(
+                target_id,
+                target_uid.as_deref(),
+                target_uname.as_deref(),
+                target_followers,
+                &result.id,
+                Some(&style),
+            );
         }
     } else if format == OutputFormat::Table {
         eprintln!("Warning: Could not open intelligence store");
