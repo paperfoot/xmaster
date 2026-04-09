@@ -3,88 +3,15 @@ use crate::errors::XmasterError;
 use crate::output::{self, CsvRenderable, OutputFormat, Tableable};
 use crate::providers::xapi::XApi;
 use reqwest::Method;
-use reqwest_oauth1::OAuthClientProvider;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::Arc;
 
 const BASE: &str = "https://api.x.com/2";
 
-// ---------------------------------------------------------------------------
-// OAuth helper
-// ---------------------------------------------------------------------------
-
-fn oauth_secrets(ctx: &AppContext) -> reqwest_oauth1::Secrets<'_> {
-    let k = &ctx.config.keys;
-    reqwest_oauth1::Secrets::new(&k.api_key, &k.api_secret)
-        .token(&k.access_token, &k.access_token_secret)
-}
-
-fn require_auth(ctx: &AppContext) -> Result<(), XmasterError> {
-    if !ctx.config.has_x_auth() {
-        return Err(XmasterError::AuthMissing {
-            provider: "x",
-            message: "X API credentials not configured".into(),
-        });
-    }
-    Ok(())
-}
-
-/// Make an OAuth-signed request and return the JSON body.
-async fn signed_request(
-    ctx: &AppContext,
-    method: Method,
-    url: &str,
-    body: Option<Value>,
-) -> Result<Value, XmasterError> {
-    require_auth(ctx)?;
-
-    let resp = match method {
-        Method::GET => {
-            ctx.client.clone().oauth1(oauth_secrets(ctx)).get(url).send().await?
-        }
-        Method::POST => {
-            let mut b = ctx.client.clone().oauth1(oauth_secrets(ctx)).post(url);
-            if let Some(ref json) = body {
-                b = b
-                    .header("Content-Type", "application/json")
-                    .body(serde_json::to_string(json)?);
-            }
-            b.send().await?
-        }
-        Method::DELETE => {
-            ctx.client.clone().oauth1(oauth_secrets(ctx)).delete(url).send().await?
-        }
-        _ => {
-            return Err(XmasterError::Api {
-                provider: "x",
-                code: "unsupported_method",
-                message: format!("Unsupported method: {method}"),
-            });
-        }
-    };
-
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-
-    if text.is_empty() {
-        return Ok(Value::Null);
-    }
-
-    if !status.is_success() {
-        return Err(XmasterError::Api {
-            provider: "x",
-            code: "api_error",
-            message: format!("HTTP {status}: {}", crate::utils::safe_truncate(&text, 200)),
-        });
-    }
-
-    serde_json::from_str(&text).map_err(|_| XmasterError::Api {
-        provider: "x",
-        code: "json_parse",
-        message: format!("Failed to parse: {}", crate::utils::safe_truncate(&text, 200)),
-    })
-}
+// OAuth1 signing and request execution now go through XApi::request()
+// instead of local boilerplate. This eliminates one of the bypass sites
+// catalogued in issue #16.
 
 // ---------------------------------------------------------------------------
 // Display types
@@ -234,7 +161,7 @@ pub async fn create(
         body["description"] = json!(desc);
     }
 
-    let val = signed_request(&ctx, Method::POST, &format!("{BASE}/lists"), Some(body)).await?;
+    let val = XApi::new(ctx.clone()).request(Method::POST, &format!("{BASE}/lists"), Some(body)).await?;
     let data = val.get("data").ok_or_else(|| XmasterError::Api {
         provider: "x",
         code: "no_data",
@@ -254,7 +181,7 @@ pub async fn delete(
     format: OutputFormat,
     id: &str,
 ) -> Result<(), XmasterError> {
-    signed_request(&ctx, Method::DELETE, &format!("{BASE}/lists/{id}"), None).await?;
+    XApi::new(ctx.clone()).request(Method::DELETE, &format!("{BASE}/lists/{id}"), None).await?;
 
     let display = ActionResult {
         action: "delete_list".into(),
@@ -274,8 +201,7 @@ pub async fn add_member(
     let api = XApi::new(ctx.clone());
     let user = api.get_user_by_username(username).await?;
 
-    signed_request(
-        &ctx,
+    XApi::new(ctx.clone()).request(
         Method::POST,
         &format!("{BASE}/lists/{list_id}/members"),
         Some(json!({ "user_id": user.id })),
@@ -300,8 +226,7 @@ pub async fn remove_member(
     let api = XApi::new(ctx.clone());
     let user = api.get_user_by_username(username).await?;
 
-    signed_request(
-        &ctx,
+    XApi::new(ctx.clone()).request(
         Method::DELETE,
         &format!("{BASE}/lists/{list_id}/members/{}", user.id),
         None,
@@ -328,7 +253,7 @@ pub async fn timeline(
         "{BASE}/lists/{list_id}/tweets?max_results={max}&tweet.fields=created_at,author_id&expansions=author_id&user.fields=username"
     );
 
-    let val = signed_request(&ctx, Method::GET, &url, None).await?;
+    let val = XApi::new(ctx.clone()).request(Method::GET, &url, None).await?;
 
     let tweets_val = val.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
     let includes = val.get("includes");
@@ -469,7 +394,7 @@ pub async fn mine(
         "{BASE}/users/{uid}/owned_lists?max_results={max}&list.fields=member_count,follower_count,created_at"
     );
 
-    let val = signed_request(&ctx, Method::GET, &url, None).await?;
+    let val = XApi::new(ctx.clone()).request(Method::GET, &url, None).await?;
     let lists_val = val.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
 
     let lists: Vec<OwnedListRow> = lists_val

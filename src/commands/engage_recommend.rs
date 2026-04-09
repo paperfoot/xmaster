@@ -569,33 +569,45 @@ pub async fn feed(
     // Phase 1: Check watchlist accounts first (saves API search calls).
     // This runs regardless of whether we have topics — watchlist accounts
     // are intrinsically interesting.
+    //
+    // Batch-hydrate missing user_ids in a single GET /2/users/by call
+    // instead of looping per-user (was O(n) calls, now O(ceil(n/100))).
     let mut watchlist_tweets = Vec::new();
     if let Ok(store) = IntelStore::open() {
-        if let Ok(watchlist) = store.list_watchlist() {
-            for entry in &watchlist {
-                let resolved_uid = if let Some(uid) = entry.user_id.clone() {
-                    Some(uid)
-                } else {
-                    match api.get_user_by_username(&entry.username).await {
-                        Ok(user) => {
-                            let followers = user
-                                .public_metrics
-                                .as_ref()
-                                .map(|m| m.followers_count as i64)
-                                .unwrap_or(entry.followers);
+        if let Ok(mut watchlist) = store.list_watchlist() {
+            // Identify entries missing user_id and batch-resolve them.
+            let missing_uids: Vec<String> = watchlist
+                .iter()
+                .filter(|e| e.user_id.is_none())
+                .map(|e| e.username.clone())
+                .collect();
+            if !missing_uids.is_empty() {
+                if let Ok(users) = api.get_users_by_usernames(&missing_uids).await {
+                    for user in &users {
+                        let followers = user
+                            .public_metrics
+                            .as_ref()
+                            .map(|m| m.followers_count as i64)
+                            .unwrap_or(0);
+                        // Find the matching entry and backfill
+                        if let Some(entry) = watchlist.iter_mut().find(|e| {
+                            e.username.to_lowercase() == user.username.to_lowercase()
+                        }) {
                             let _ = store.add_watchlist(
                                 &entry.username,
                                 Some(&user.id),
                                 entry.topic.as_deref(),
                                 followers,
                             );
-                            Some(user.id)
+                            entry.user_id = Some(user.id.clone());
+                            entry.followers = followers;
                         }
-                        Err(_) => None,
                     }
-                };
+                }
+            }
 
-                if let Some(uid) = resolved_uid.as_deref() {
+            for entry in &watchlist {
+                if let Some(ref uid) = entry.user_id {
                     let start_time = {
                         let since = chrono::Utc::now() - chrono::Duration::minutes(max_age_mins as i64);
                         since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)

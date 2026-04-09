@@ -4,89 +4,23 @@ use crate::errors::XmasterError;
 use crate::output::{self, CsvRenderable, OutputFormat, Tableable};
 use crate::providers::xapi::XApi;
 use reqwest::Method;
-use reqwest_oauth1::OAuthClientProvider;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 const BASE: &str = "https://api.x.com/2";
 
-// ---------------------------------------------------------------------------
-// OAuth helper (same pattern as xapi.rs)
-// ---------------------------------------------------------------------------
-
-fn oauth_secrets(ctx: &AppContext) -> reqwest_oauth1::Secrets<'_> {
-    let k = &ctx.config.keys;
-    reqwest_oauth1::Secrets::new(&k.api_key, &k.api_secret)
-        .token(&k.access_token, &k.access_token_secret)
-}
-
-fn require_auth(ctx: &AppContext) -> Result<(), XmasterError> {
-    if !ctx.config.has_x_auth() {
-        return Err(XmasterError::AuthMissing {
-            provider: "x",
-            message: "X API credentials not configured".into(),
-        });
-    }
-    Ok(())
-}
+// OAuth1 signing and request execution now go through XApi::request()
+// instead of local boilerplate. This eliminates one of the bypass sites
+// catalogued in issue #16.
 
 async fn signed_request(
-    ctx: &AppContext,
+    ctx: &Arc<AppContext>,
     method: Method,
     url: &str,
     body: Option<Value>,
 ) -> Result<(), XmasterError> {
-    require_auth(ctx)?;
-
-    let resp = match method {
-        Method::PUT => {
-            let mut b = ctx.client.clone().oauth1(oauth_secrets(ctx)).put(url);
-            if let Some(ref json) = body {
-                b = b
-                    .header("Content-Type", "application/json")
-                    .body(serde_json::to_string(json)?);
-            }
-            b.send().await?
-        }
-        Method::POST => {
-            let mut b = ctx.client.clone().oauth1(oauth_secrets(ctx)).post(url);
-            if let Some(ref json) = body {
-                b = b
-                    .header("Content-Type", "application/json")
-                    .body(serde_json::to_string(json)?);
-            }
-            b.send().await?
-        }
-        Method::DELETE => {
-            ctx.client.clone().oauth1(oauth_secrets(ctx)).delete(url).send().await?
-        }
-        _ => {
-            return Err(XmasterError::Api {
-                provider: "x",
-                code: "unsupported_method",
-                message: format!("Unsupported method: {method}"),
-            });
-        }
-    };
-
-    let status = resp.status();
-    if status == 401 || status == 403 {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(XmasterError::AuthMissing {
-            provider: "x",
-            message: format!("HTTP {status}: {text}"),
-        });
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(XmasterError::Api {
-            provider: "x",
-            code: "api_error",
-            message: format!("HTTP {status}: {}", crate::utils::safe_truncate(&text, 200)),
-        });
-    }
-
+    let _val = XApi::new(ctx.clone()).request(method, url, body).await?;
     Ok(())
 }
 

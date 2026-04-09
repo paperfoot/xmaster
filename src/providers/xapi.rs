@@ -286,7 +286,11 @@ impl XApi {
 
     /// Low-level signed request with automatic retry on transient errors.
     /// Returns the parsed JSON `Value`.
-    async fn request(
+    ///
+    /// Public so command files can avoid duplicating OAuth1 boilerplate.
+    /// Prefer higher-level helpers (`request_data`, `request_list`) when
+    /// deserializing into known types.
+    pub async fn request(
         &self,
         method: Method,
         url: &str,
