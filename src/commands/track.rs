@@ -22,6 +22,11 @@ pub async fn track_run(
     // (silent on errors, never fails the run)
     let promoted = auto_promote_hot_reply_targets();
 
+    // Surface cross-post candidates — standalone posts that crossed 5k
+    // impressions in the last 14d are worth repurposing on other platforms
+    // (IG stills, LinkedIn). The clinstagram skill can take the screenshot.
+    let cross_post_candidates = find_cross_post_candidates_safe();
+
     let mut meta = serde_json::json!({});
     if reply_backs_checked > 0 {
         meta["reply_backs_checked"] = reply_backs_checked.into();
@@ -30,9 +35,29 @@ pub async fn track_run(
         meta["watchlist_auto_promoted_count"] = promoted.len().into();
         meta["watchlist_auto_promoted"] = promoted.into();
     }
+    if !cross_post_candidates.is_empty() {
+        meta["cross_post_candidates_count"] = cross_post_candidates.len().into();
+        meta["cross_post_candidates"] = serde_json::to_value(&cross_post_candidates)
+            .unwrap_or(serde_json::Value::Null);
+        meta["cross_post_hint"] = serde_json::Value::String(
+            "Standalone post(s) crossed 5k imps — consider screenshotting to IG via the clinstagram skill for a ~2x audience bounce".into()
+        );
+    }
 
     output::render(format, &summary, Some(meta));
     Ok(())
+}
+
+/// Safe wrapper around `find_cross_post_candidates` — returns empty on any
+/// store failure so track_run never breaks just because the amplification
+/// hint couldn't be computed.
+fn find_cross_post_candidates_safe() -> Vec<crate::intel::store::CrossPostCandidate> {
+    match crate::intel::store::IntelStore::open() {
+        Ok(store) => store
+            .find_cross_post_candidates(5_000, 14, 5)
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Run the store-layer hot-target selector and insert each winner into the

@@ -38,6 +38,20 @@ pub struct HotReplyTarget {
     pub target_followers: i64,
 }
 
+/// A post that outperformed enough to be worth repurposing on another
+/// platform. Returned by `find_cross_post_candidates`, surfaced as a
+/// handoff suggestion in `xmaster track run`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossPostCandidate {
+    pub tweet_id: String,
+    pub text_preview: String,
+    pub posted_at: i64,
+    pub impressions: i64,
+    pub likes: i64,
+    pub bookmarks: i64,
+    pub suggested_action: String,
+}
+
 /// Aggregated stats for a reply target across all replies in a time window.
 /// Returned by `rank_hot_reply_targets` for the `engage hot-targets` command.
 #[derive(Debug, Clone, Serialize)]
@@ -1218,6 +1232,70 @@ impl IntelStore {
         rows.collect()
     }
 
+    /// Find standalone posts (not replies) that crossed the impressions
+    /// threshold and are fresh enough to repurpose on other platforms
+    /// (e.g., screenshot → Instagram still, LinkedIn carousel, etc).
+    ///
+    /// This is the output surface for the cross-platform amplification
+    /// pattern observed in @jackmoses777's 198K-X-views → 325K-IG-views
+    /// case (Apr 2026): high-performing X text posts repurposed as IG
+    /// stills outperform native IG content for X writers.
+    ///
+    /// Returns at most `max_results` posts, ordered by latest impressions
+    /// descending. `min_impressions` defaults to 5000 in the caller.
+    pub fn find_cross_post_candidates(
+        &self,
+        min_impressions: i64,
+        max_age_days: i64,
+        max_results: i64,
+    ) -> Result<Vec<CrossPostCandidate>, rusqlite::Error> {
+        let cutoff = Utc::now().timestamp() - max_age_days * 24 * 3600;
+        let mut stmt = self.conn.prepare(
+            "SELECT p.tweet_id,
+                    p.text,
+                    p.posted_at,
+                    MAX(ms.impressions) AS peak_impressions,
+                    MAX(ms.likes) AS peak_likes,
+                    MAX(ms.bookmarks) AS peak_bookmarks
+             FROM posts p
+             JOIN metric_snapshots ms ON ms.tweet_id = p.tweet_id
+             WHERE p.content_type NOT IN ('reply', 'thread_reply')
+               AND p.posted_at >= ?1
+             GROUP BY p.tweet_id, p.text, p.posted_at
+             HAVING MAX(ms.impressions) >= ?2
+             ORDER BY MAX(ms.impressions) DESC
+             LIMIT ?3"
+        )?;
+        let rows = stmt.query_map(
+            params![cutoff, min_impressions, max_results],
+            |row| {
+                let tweet_id: String = row.get(0)?;
+                let text: String = row.get(1)?;
+                let posted_at: i64 = row.get(2)?;
+                let impressions: i64 = row.get(3)?;
+                let likes: i64 = row.get(4)?;
+                let bookmarks: i64 = row.get(5)?;
+                Ok(CrossPostCandidate {
+                    tweet_id: tweet_id.clone(),
+                    text_preview: if text.chars().count() > 120 {
+                        let truncated: String = text.chars().take(120).collect();
+                        format!("{truncated}...")
+                    } else {
+                        text
+                    },
+                    posted_at,
+                    impressions,
+                    likes,
+                    bookmarks,
+                    suggested_action: format!(
+                        "Screenshot https://x.com/i/status/{tweet_id} and repost as an Instagram still via the clinstagram skill"
+                    ),
+                })
+            },
+        )?;
+        rows.collect()
+    }
+
     /// Aggregate reply-outcome stats per target username over the last `days`.
     ///
     /// Filters by min_samples, min_avg_impressions, min_avg_profile_clicks (HAVING).
@@ -1412,6 +1490,38 @@ mod tests {
         assert_eq!(velocity.posts_24h, 0);
         assert_eq!(velocity.standalone_24h, 0);
         assert!(velocity.accelerating_post.is_none());
+    }
+
+    #[test]
+    fn cross_post_candidates_filters_and_excludes_replies() {
+        let store = test_store();
+        // Standalone post that hit 12k imps — a candidate
+        store
+            .log_post("big_hit", "a viral thought", "text", None, None, None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("big_hit", 400, 50, 30, 12_000, 100, 10, 5, 30, None)
+            .unwrap();
+        // Standalone post with only 1k imps — below threshold
+        store
+            .log_post("small_post", "meh", "text", None, None, None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("small_post", 10, 1, 0, 1_000, 5, 0, 0, 20, None)
+            .unwrap();
+        // Reply that happened to go viral — must be excluded
+        store
+            .log_post("viral_reply", "nailed it", "reply", Some("other"), None, None, None, None)
+            .unwrap();
+        store
+            .log_metric_snapshot("viral_reply", 500, 60, 40, 15_000, 80, 15, 20, 40, None)
+            .unwrap();
+
+        let candidates = store.find_cross_post_candidates(5_000, 14, 10).unwrap();
+        assert_eq!(candidates.len(), 1, "only big_hit qualifies");
+        assert_eq!(candidates[0].tweet_id, "big_hit");
+        assert_eq!(candidates[0].impressions, 12_000);
+        assert!(candidates[0].suggested_action.contains("clinstagram"));
     }
 
     #[test]
