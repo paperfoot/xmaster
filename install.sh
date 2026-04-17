@@ -1,9 +1,9 @@
 #!/bin/sh
 # Install xmaster - enterprise-grade X/Twitter CLI
-# Usage: curl -fsSL https://raw.githubusercontent.com/199-biotechnologies/xmaster/master/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/paperfoot/xmaster/master/install.sh | sh
 set -e
 
-REPO="199-biotechnologies/xmaster"
+REPO="paperfoot/xmaster"
 BINARY="xmaster"
 
 # Detect OS and architecture
@@ -68,5 +68,5 @@ echo "  xmaster --help"
 echo "  xmaster config check"
 echo ""
 echo "★ If xmaster saves you time, a GitHub star helps others find it:"
-echo "  https://github.com/199-biotechnologies/xmaster"
+echo "  https://github.com/paperfoot/xmaster"
 echo ""

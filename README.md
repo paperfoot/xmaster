@@ -6,14 +6,14 @@
 
 <br />
 
-[![Star this repo](https://img.shields.io/github/stars/199-biotechnologies/xmaster?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/199-biotechnologies/xmaster/stargazers)
+[![Star this repo](https://img.shields.io/github/stars/paperfoot/xmaster?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/paperfoot/xmaster/stargazers)
 &nbsp;&nbsp;
 [![Follow @longevityboris](https://img.shields.io/badge/Follow_%40longevityboris-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/longevityboris)
 
 <br />
 
 [![Crates.io](https://img.shields.io/crates/v/xmaster?style=for-the-badge&logo=rust&logoColor=white&label=crates.io)](https://crates.io/crates/xmaster)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](https://github.com/199-biotechnologies/xmaster/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](https://github.com/paperfoot/xmaster/blob/main/LICENSE)
 [![Homebrew](https://img.shields.io/badge/Homebrew-available-orange?style=for-the-badge&logo=homebrew&logoColor=white)](https://github.com/199-biotechnologies/homebrew-tap)
 [![Built with Rust](https://img.shields.io/badge/Built_with-Rust-dea584?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
@@ -35,7 +35,7 @@ Most X tools make you pick between the official API and scraping. XMaster gives 
 
 **One-liner (macOS / Linux):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/199-biotechnologies/xmaster/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/paperfoot/xmaster/master/install.sh | sh
 ```
 
 **Homebrew:**
@@ -51,7 +51,7 @@ cargo install xmaster
 
 **From source:**
 ```bash
-cargo install --git https://github.com/199-biotechnologies/xmaster
+cargo install --git https://github.com/paperfoot/xmaster
 ```
 
 ### Quick Start
@@ -322,7 +322,7 @@ export XMASTER_KEYS__XAI=your-xai-key
 ## Building from Source
 
 ```bash
-git clone https://github.com/199-biotechnologies/xmaster
+git clone https://github.com/paperfoot/xmaster
 cd xmaster
 cargo build --release
 # Binary at target/release/xmaster
@@ -346,7 +346,7 @@ Built by [Boris Djordjevic](https://github.com/longevityboris) at [199 Biotechno
 
 **If this is useful to you:**
 
-[![Star this repo](https://img.shields.io/github/stars/199-biotechnologies/xmaster?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/199-biotechnologies/xmaster/stargazers)
+[![Star this repo](https://img.shields.io/github/stars/paperfoot/xmaster?style=for-the-badge&logo=github&label=%E2%AD%90%20Star%20this%20repo&color=yellow)](https://github.com/paperfoot/xmaster/stargazers)
 &nbsp;&nbsp;
 [![Follow @longevityboris](https://img.shields.io/badge/Follow_%40longevityboris-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/longevityboris)
 

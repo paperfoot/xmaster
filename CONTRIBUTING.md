@@ -18,7 +18,7 @@ Thanks for your interest in contributing.
 
 ## What to Work On
 
-- Check [open issues](https://github.com/199-biotechnologies/xmaster/issues) for things labeled `good first issue` or `help wanted`
+- Check [open issues](https://github.com/paperfoot/xmaster/issues) for things labeled `good first issue` or `help wanted`
 - Bug fixes are always welcome
 - If you want to add a new command or feature, open an issue first so we can discuss scope
 

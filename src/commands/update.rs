@@ -1,7 +1,7 @@
 use crate::errors::XmasterError;
 use serde::Deserialize;
 
-const REPO: &str = "199-biotechnologies/xmaster";
+const REPO: &str = "paperfoot/xmaster";
 
 #[derive(Deserialize)]
 struct GhRelease {

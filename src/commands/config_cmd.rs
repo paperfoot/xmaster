@@ -476,7 +476,7 @@ pub async fn guide(format: OutputFormat) -> Result<(), XmasterError> {
             SetupStep {
                 step: 3,
                 title: "Set App Permissions to Read+Write+DM".into(),
-                instructions: "Go to your App -> Settings -> User authentication settings. Set App permissions to 'Read and write and Direct message'. Set Type of App to 'Native App'. Set Callback URL to http://localhost:3000/callback. Set Website URL to https://github.com/199-biotechnologies/xmaster. Save.".into(),
+                instructions: "Go to your App -> Settings -> User authentication settings. Set App permissions to 'Read and write and Direct message'. Set Type of App to 'Native App'. Set Callback URL to http://localhost:3000/callback. Set Website URL to https://github.com/paperfoot/xmaster. Save.".into(),
                 url: None,
                 command: None,
             },
