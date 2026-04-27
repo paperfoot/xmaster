@@ -227,8 +227,9 @@ The opportunity scorer ranks targets by reciprocity, reply ROI, size fit (adapti
 | `track followers` | Track follower changes | `xmaster track followers` |
 | `track growth` | Follower growth history | `xmaster track growth -d 30` |
 | `inspire` | Browse your discovered posts library | `xmaster inspire --topic "longevity"` |
+| `inspire --long` | Surface long-form / Article-candidate exemplars (>=500 chars) | `xmaster inspire --long --topic "biotech"` |
 
-`analyze` estimates 9 proxy signals aligned with the 2026 X algorithm and scores per goal (replies, quotes, shares, follows, impressions).
+`analyze` estimates 9 proxy signals aligned with the 2026 X algorithm and scores per goal (replies, quotes, shares, follows, impressions). For drafts above 500 chars it also runs **long-form heuristics** (preview-card hook on the first 280 chars, scannability, payoff density, dwell sweet-spot 500–2000 chars) — informed by the Jan 2026 $1M Article Contest results. Run `xmaster agent-info` for the full long-form pattern set including timing, structure, and a `nanaban` pointer for cover-image generation.
 
 ### Lists
 
